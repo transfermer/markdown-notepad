@@ -190,6 +190,7 @@ input:focus, textarea:focus { border-color: var(--accent); }
 
 /* ---------- Editor ---------- */
 .editor-area { display: flex; flex-direction: column; padding: 18px 24px; overflow: hidden; min-height: 0; }
+#editor-view { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .empty-state { margin: auto; text-align: center; }
 
 .editor-header { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 8px; }
