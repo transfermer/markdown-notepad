@@ -1,10 +1,14 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#5a96ff"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1e2230"/>
+      <stop offset="1" stop-color="#0f1117"/>
+    </linearGradient>
+    <linearGradient id="z" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#9fbfff"/>
       <stop offset="1" stop-color="#4f8cff"/>
     </linearGradient>
   </defs>
-  <rect width="64" height="64" rx="12" ry="12" fill="url(#bg)"/>
-  <text x="32" y="44" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif" font-size="36" font-weight="700" fill="#ffffff" letter-spacing="0">Z</text>
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="url(#bg)" stroke="#2a2f3f" stroke-width="2"/>
+  <path d="M18 20 H46 L20 44 H46" fill="none" stroke="url(#z)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
