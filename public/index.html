@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Markdown Notepad</title>
+  <meta name="description" content="A private markdown notepad. Write, edit, and share notes.">
+  <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+  <div id="app">
+
+    <!-- Login screen -->
+    <section id="login-view" class="view hidden">
+      <div class="login-card">
+        <h1>🔒 Markdown Notepad</h1>
+        <p class="muted">Sign in to access your notes.</p>
+        <form id="login-form">
+          <input type="password" id="login-password" placeholder="Admin password" autocomplete="current-password" required minlength="8">
+          <button type="submit" class="btn primary btn-block">Sign in</button>
+        </form>
+        <p id="login-error" class="error-text hidden"></p>
+      </div>
+    </section>
+
+    <!-- Main app -->
+    <section id="main-view" class="view hidden">
+      <header class="topbar">
+        <div class="topbar-left">
+          <h1 class="brand">📝 Markdown Notepad</h1>
+          <button id="btn-new" class="btn primary" title="New note">＋ New</button>
+        </div>
+        <div class="topbar-right">
+          <button id="btn-export" class="btn" title="Download this note as .md">⬇ Save to local</button>
+          <button id="btn-backup" class="btn hidden" title="Backup this note to WebDAV">☁ Backup</button>
+          <button id="btn-logout" class="btn ghost">Log out</button>
+        </div>
+      </header>
+
+      <div class="layout">
+        <!-- Sidebar: note list -->
+        <aside class="sidebar">
+          <input type="search" id="search" class="search" placeholder="Search notes…" autocomplete="off">
+          <ul id="note-list" class="note-list"></ul>
+          <div id="note-count" class="note-count muted"></div>
+        </aside>
+
+        <!-- Editor / viewer -->
+        <main class="editor-area">
+          <div id="empty-state" class="empty-state muted hidden">
+            <p>Select a note or create a new one.</p>
+          </div>
+
+          <div id="editor-view" class="hidden">
+            <div class="editor-header">
+              <input type="text" id="note-title" class="title-input" placeholder="Note title" maxlength="200">
+              <div class="editor-meta">
+                <span id="note-saved" class="muted"></span>
+                <button id="btn-preview" class="btn small" title="Toggle preview">👁 Preview</button>
+                <button id="btn-share" class="btn small" title="Share this note">🔗 Share</button>
+                <button id="btn-delete" class="btn small danger" title="Delete note">🗑</button>
+              </div>
+            </div>
+
+            <div class="editor-body">
+              <textarea id="note-content" class="content-input" placeholder="Write in Markdown…"></textarea>
+              <div id="note-preview" class="preview hidden"></div>
+            </div>
+          </div>
+        </main>
+      </div>
+    </section>
+
+    <!-- Share modal -->
+    <div id="share-modal" class="modal hidden">
+      <div class="modal-card">
+        <h2>Share note</h2>
+        <p class="muted">Anyone with this link can read the note.</p>
+        <input type="text" id="share-url" class="modal-input" readonly>
+        <div class="modal-actions">
+          <button id="btn-share-copy" class="btn">Copy link</button>
+          <button id="btn-share-cancel" class="btn ghost">Close</button>
+        </div>
+        <p id="share-status" class="muted small"></p>
+      </div>
+    </div>
+
+  </div>
+
+  <script src="/vendor/markdown-it.min.js"></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>

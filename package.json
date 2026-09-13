@@ -1,0 +1,16 @@
+{
+  "name": "markdown-notepad",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Markdown notepad reader/editor on Cloudflare Pages + Functions + D1 + KV",
+  "scripts": {
+    "dev": "wrangler pages dev public",
+    "db:init": "wrangler d1 execute markdown-notepad-db --remote --file=./schema.sql",
+    "db:init:local": "wrangler d1 execute markdown-notepad-db --local --file=./schema.sql",
+    "test": "node test-api.mjs && node test-webdav.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^4.19.0"
+  }
+}

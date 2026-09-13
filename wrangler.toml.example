@@ -1,0 +1,28 @@
+# ============================================================================
+# wrangler.toml.example  —  SAFE TO COMMIT (placeholders only)
+#
+# This file is a TEMPLATE for LOCAL DEVELOPMENT ONLY.
+# Real D1/KV ids and secrets are NEVER committed to the repo:
+#
+#   • Local dev:      cp wrangler.toml.example wrangler.toml  (git-ignored),
+#                     then fill in your IDs.
+#   • GitHub deploy:  bindings are configured in the Cloudflare DASHBOARD
+#                     (Pages → Settings → Bindings) — no wrangler.toml needed.
+#   • Secrets:        ADMIN_PASSWORD / SESSION_SECRET / WEBDAV_* are set in
+#                     the dashboard (or `wrangler pages secret put`), never
+#                     in this repo.
+# ============================================================================
+name = "markdown-notepad"
+compatibility_date = "2025-01-01"
+pages_build_output_dir = "public"
+
+# D1 (primary storage — notes + share records)
+[[d1_databases]]
+binding = "DB"
+database_name = "markdown-notepad-db"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+
+# KV (cache — note reads, note list, shared-note renders)
+[[kv_namespaces]]
+binding = "CACHE"
+id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
