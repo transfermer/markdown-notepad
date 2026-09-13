@@ -141,6 +141,51 @@ export function fmtTime(ms) {
 }
 
 // ---------------------------------------------------------------------------
+// Note metadata helpers (category + tags)
+// ---------------------------------------------------------------------------
+
+const CATEGORY_MAX = 100;
+const TAG_MAX = 50;
+const TAG_COUNT_MAX = 20;
+
+export function normalizeCategory(v) {
+  if (typeof v !== 'string') return '';
+  return v.trim().slice(0, CATEGORY_MAX);
+}
+
+/**
+ * Accepts an array of tags or a comma/space separated string.
+ * Returns a clean, deduped array of tag strings.
+ */
+export function normalizeTags(v) {
+  let arr = [];
+  if (Array.isArray(v)) arr = v;
+  else if (typeof v === 'string') arr = v.split(',');
+  const seen = new Set();
+  const out = [];
+  for (const raw of arr) {
+    if (typeof raw !== 'string') continue;
+    const t = raw.trim().slice(0, TAG_MAX);
+    if (!t || seen.has(t)) continue;
+    seen.add(t);
+    out.push(t);
+    if (out.length >= TAG_COUNT_MAX) break;
+  }
+  return out;
+}
+
+/** Parse the text (JSON array) form used in D1 into an array. */
+export function parseTagsJson(str) {
+  if (Array.isArray(str)) return str;
+  try {
+    const a = JSON.parse(str || '[]');
+    return Array.isArray(a) ? a : [];
+  } catch {
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
 // KV cache helpers
 // ---------------------------------------------------------------------------
 
@@ -185,6 +230,7 @@ export function noteCacheKeys(noteId, note = null) {
   }
   keys.push('notes:list');
   keys.push('notes:list:1');
+  keys.push('notes:index');
   return [...new Set(keys)];
 }
 

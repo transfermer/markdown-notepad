@@ -112,7 +112,8 @@ class Statement {
     const sql = this.sql;
     const a = this.bindArgs;
     if (sql.includes('INSERT INTO notes')) {
-      this.db.notes.push({ id: a[0], title: a[1], content: a[2], created_at: a[3], updated_at: a[4] });
+      // (id, title, category, tags, content, created_at, updated_at)
+      this.db.notes.push({ id: a[0], title: a[1], category: a[2], tags: a[3], content: a[4], created_at: a[5], updated_at: a[6] });
       return { success: true };
     }
     if (sql.includes('INSERT INTO shares')) {
@@ -120,8 +121,9 @@ class Statement {
       return { success: true };
     }
     if (sql.includes('UPDATE notes')) {
-      const n = this.db.notes.find((x) => x.id === a[3]);
-      if (n) { n.title = a[0]; n.content = a[1]; n.updated_at = a[2]; }
+      // (title, content, category, tags, updated_at, id)
+      const n = this.db.notes.find((x) => x.id === a[5]);
+      if (n) { n.title = a[0]; n.content = a[1]; n.category = a[2]; n.tags = a[3]; n.updated_at = a[4]; }
       return { success: true };
     }
     if (sql.includes('DELETE FROM notes')) {
@@ -180,17 +182,22 @@ async function main() {
   check('notes list requires auth', unauthed.status === 401);
 
   // ---------- notes ----------
-  const create = await callFunction('api/notes/index.js', { method: 'POST', body: { title: 'Hello', content: '# Hi\n\n**bold**' }, env: () => e, headers: authedHeaders });
+  const create = await callFunction('api/notes/index.js', { method: 'POST', body: { title: 'Hello', content: '# Hi\n\n**bold**', category: 'Work', tags: ['todo', 'ideas'] }, env: () => e, headers: authedHeaders });
   const created = (await create.json()).data;
-  check('create note', create.status === 201 && !!created.id);
+  check('create note', create.status === 201 && !!created.id && created.category === 'Work' && created.tags.length === 2);
 
   const list = await callFunction('api/notes/index.js', { env: () => e, headers: authedHeaders });
   const listData = (await list.json()).data;
-  check('list notes', listData.length === 1 && listData[0].title === 'Hello');
+  check('list notes', listData.length === 1 && listData[0].title === 'Hello' && listData[0].category === 'Work' && listData[0].tags.join() === 'todo,ideas');
 
   const get = await callFunction('api/notes/[id].js', { params: { id: created.id }, env: () => e, headers: authedHeaders });
   const got = (await get.json()).data;
-  check('get note', got.content === '# Hi\n\n**bold**');
+  check('get note', got.content === '# Hi\n\n**bold**' && got.category === 'Work' && got.tags.join() === 'todo,ideas');
+
+  // ---------- category/tag index ----------
+  const idx = await callFunction('api/index/index.js', { env: () => e, headers: authedHeaders });
+  const idxData = (await idx.json()).data;
+  check('index returns categories + tags', idx.status === 200 && idxData.categories.length === 1 && idxData.categories[0].name === 'Work' && idxData.tags.length === 2);
 
   // KV cache: subsequent GET served from KV
   await e.CACHE.put('note:' + created.id, JSON.stringify({ id: created.id, title: 'CACHED', content: 'cache-hit', createdAt: 1, updatedAt: 1 }), { expirationTtl: 60 });

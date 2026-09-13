@@ -3,7 +3,8 @@
 // DELETE /api/notes/:id -> delete note (no share cascade needed, D1 FK handles it)
 import {
   ok, fail, unauthorized, notFound, kvGetJSON, kvPutJSON,
-  invalidateNoteCache, now, getEnv, webdavBackup
+  invalidateNoteCache, now, getEnv, webdavBackup,
+  normalizeCategory, normalizeTags, parseTagsJson
 } from '../_lib.js';
 
 export async function onRequest(context) {
@@ -27,7 +28,7 @@ async function handleGet(context, id) {
   if (cached) return ok(cached);
 
   const { results } = await context.env.DB.prepare(
-    'SELECT id, title, content, created_at, updated_at FROM notes WHERE id = ?'
+    'SELECT id, title, category, tags, content, created_at, updated_at FROM notes WHERE id = ?'
   ).bind(id).all();
 
   if (!results || results.length === 0) return notFound('Note not found');
@@ -36,6 +37,8 @@ async function handleGet(context, id) {
   const note = {
     id: row.id,
     title: row.title,
+    category: row.category || '',
+    tags: parseTagsJson(row.tags),
     content: row.content,
     createdAt: row.created_at,
     updatedAt: row.updated_at
@@ -54,22 +57,26 @@ async function handlePut(context, id) {
   }
   const title = typeof body.title === 'string' ? body.title.trim().slice(0, 200) : undefined;
   const content = typeof body.content === 'string' ? body.content : undefined;
-  if (title === undefined && content === undefined) {
+  const category = typeof body.category === 'string' ? normalizeCategory(body.category) : undefined;
+  const tags = typeof body.tags !== 'undefined' ? normalizeTags(body.tags) : undefined;
+  if (title === undefined && content === undefined && category === undefined && tags === undefined) {
     return fail('Nothing to update', 400, 'BAD_REQUEST');
   }
   const ts = now();
 
   const existing = await context.env.DB.prepare(
-    'SELECT id, title, content, created_at FROM notes WHERE id = ?'
+    'SELECT id, title, category, tags, content, created_at FROM notes WHERE id = ?'
   ).bind(id).first();
   if (!existing) return notFound('Note not found');
 
   const newTitle = title === undefined ? existing.title : title;
   const newContent = content === undefined ? existing.content : content;
+  const newCategory = category === undefined ? (existing.category || '') : category;
+  const newTags = tags === undefined ? parseTagsJson(existing.tags) : tags;
 
   await context.env.DB.prepare(
-    'UPDATE notes SET title = ?, content = ?, updated_at = ? WHERE id = ?'
-  ).bind(newTitle, newContent, ts, id).run();
+    'UPDATE notes SET title = ?, content = ?, category = ?, tags = ?, updated_at = ? WHERE id = ?'
+  ).bind(newTitle, newContent, newCategory, JSON.stringify(newTags), ts, id).run();
 
   // Capture share token so the public share cache is invalidated too.
   const shareRow = await context.env.DB.prepare('SELECT token FROM shares WHERE note_id = ?').bind(id).first();
@@ -78,6 +85,8 @@ async function handlePut(context, id) {
     id,
     title: newTitle,
     content: newContent,
+    category: newCategory,
+    tags: newTags,
     createdAt: existing.created_at,
     updatedAt: ts
   };

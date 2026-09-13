@@ -7,6 +7,8 @@ A self-hosted, Cloudflare-deployable **markdown notepad reader & editor**.
 - **Storage:** Cloudflare D1 (SQLite-based, primary store)
 - **Cache:** Cloudflare KV (list + note + shared-note reads, session tokens)
 - **Auth:** Admin login with a password (HttpOnly session cookie)
+- **Editor:** Full-height editor + live preview, markdown toolbar (headings, bold/italic, lists, links, code blocks, tables), category + tags, search, quick filters
+- **Organization:** Categories (`category`) + tags (`tags`) per note; sidebar shows categories/tags as quick tools with counts
 - **Share:** Public read-only links (`/s/:token`)
 - **Local export:** Every note can be downloaded as a `.md` file
 - **WebDAV backup (optional):** Push notes to a WebDAV server via `WEBDAV_URL`
@@ -26,6 +28,7 @@ Browser ──▶ Pages static site (public/)
               │     ├── auth/login|logout|check  → session cookie (KV)
               │     ├── notes  (list/create)     → D1 + KV cache
               │     ├── notes/:id (get/put/del)  → D1 + KV cache + WebDAV push
+              │     ├── index (categories/tags)  → D1 + KV cache
               │     ├── shared (create token)    → D1
               │     ├── shared/:token (public)   → D1 + KV cache
               │     ├── backup/:id (WebDAV)      → optional
@@ -104,6 +107,14 @@ Edit → **Save** → **Redeploy** after adding bindings.
 ```bash
 npx wrangler d1 execute markdown-notepad-db --remote --file=./schema.sql
 ```
+
+> **Upgrading an existing install** — if your `notes` table was created before
+> this version (no `category`/`tags` columns), run these once in the D1 console
+> (or via `wrangler d1 execute`) after deploying:
+> ```sql
+> ALTER TABLE notes ADD COLUMN category TEXT NOT NULL DEFAULT '';
+> ALTER TABLE notes ADD COLUMN tags    TEXT NOT NULL DEFAULT '[]';
+> ```
 
 ### 1.6 Done 🎉
 
@@ -186,8 +197,9 @@ Other notes:
 | GET    | `/api/notes`        | ✓    | list notes (KV-cached)               |
 | POST   | `/api/notes`        | ✓    | create note                          |
 | GET    | `/api/notes/:id`    | ✓    | get note (KV-cached)                 |
-| PUT    | `/api/notes/:id`    | ✓    | update title/content (+ WebDAV push) |
+| PUT    | `/api/notes/:id`    | ✓    | update title/content/category/tags (+ WebDAV push) |
 | DELETE | `/api/notes/:id`    | ✓    | delete note                          |
+| GET    | `/api/index`        | ✓    | aggregate categories + tags (KV-cached, powers sidebar) |
 | POST   | `/api/shared`       | ✓    | `{ noteId }` → `{ token }`           |
 | GET    | `/api/shared/:token`| –    | public note payload (KV-cached)      |
 | POST   | `/api/backup/:id`   | ✓    | manual WebDAV push                   |
@@ -215,6 +227,7 @@ Auth = HttpOnly cookie `mdnote_session` verified against KV.
     │   ├── health.js
     │   ├── auth/{login,logout,check}.js
     │   ├── notes/index.js, notes/[id].js
+    │   ├── index/index.js      # category/tag aggregate
     │   ├── shared/index.js, shared/[token].js
     │   └── backup/[id].js
     └── s/[token].js          # public share page
@@ -223,6 +236,6 @@ Auth = HttpOnly cookie `mdnote_session` verified against KV.
 ## 8. Tests
 
 ```bash
-node test-api.mjs      # 21 end-to-end API tests (auth, notes, KV cache, shares)
+node test-api.mjs      # 22 end-to-end API tests (auth, notes, KV cache, shares, index)
 node test-webdav.mjs   # WebDAV backup against a local mock server
 ```

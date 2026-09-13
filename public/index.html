@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Markdown Notepad</title>
-  <meta name="description" content="A private markdown notepad. Write, edit, and share notes.">
+  <meta name="description" content="A private markdown notepad. Write, edit, organize, and share notes.">
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
@@ -28,7 +28,7 @@
       <header class="topbar">
         <div class="topbar-left">
           <h1 class="brand">📝 Markdown Notepad</h1>
-          <button id="btn-new" class="btn primary" title="New note">＋ New</button>
+          <button id="btn-new" class="btn primary" title="New note">+ New</button>
         </div>
         <div class="topbar-right">
           <button id="btn-export" class="btn" title="Download this note as .md">⬇ Save to local</button>
@@ -38,11 +38,32 @@
       </header>
 
       <div class="layout">
-        <!-- Sidebar: note list -->
+        <!-- Sidebar: filters + categories + tags + note list -->
         <aside class="sidebar">
-          <input type="search" id="search" class="search" placeholder="Search notes…" autocomplete="off">
-          <ul id="note-list" class="note-list"></ul>
+          <input type="search" id="search" class="search" placeholder="Search notes..." autocomplete="off">
+
+          <!-- Quick tools -->
+          <div class="side-section">
+            <div class="side-section-title">Quick tools</div>
+            <button class="quick-tool active" data-filter="all">📋 All notes <span class="count" id="count-all"></span></button>
+            <button class="quick-tool" data-filter="uncategorized">🗂 Uncategorized</button>
+            <button class="quick-tool" data-filter="untagged">🏷 Untagged</button>
+          </div>
+
+          <!-- Categories -->
+          <div class="side-section">
+            <div class="side-section-title">📁 Categories</div>
+            <div id="category-list" class="tag-cloud"><span class="muted small">None yet</span></div>
+          </div>
+
+          <!-- Tags -->
+          <div class="side-section">
+            <div class="side-section-title">🏷 Tags</div>
+            <div id="tag-list" class="tag-cloud"><span class="muted small">None yet</span></div>
+          </div>
+
           <div id="note-count" class="note-count muted"></div>
+          <ul id="note-list" class="note-list"></ul>
         </aside>
 
         <!-- Editor / viewer -->
@@ -62,8 +83,18 @@
               </div>
             </div>
 
+            <!-- Category + tags -->
+            <div class="editor-meta-row">
+              <input type="text" id="note-category" class="meta-input" placeholder="Category (e.g. Work)" maxlength="100" list="category-suggestions">
+              <input type="text" id="note-tags" class="meta-input" placeholder="Tags, comma separated (e.g. todo, ideas)" maxlength="400">
+              <datalist id="category-suggestions"></datalist>
+            </div>
+
+            <!-- Markdown toolbar -->
+            <div id="md-toolbar" class="md-toolbar" title="Formatting tools"></div>
+
             <div class="editor-body">
-              <textarea id="note-content" class="content-input" placeholder="Write in Markdown…"></textarea>
+              <textarea id="note-content" class="content-input" placeholder="Write in Markdown..."></textarea>
               <div id="note-preview" class="preview hidden"></div>
             </div>
           </div>

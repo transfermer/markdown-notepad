@@ -2,7 +2,8 @@
 // POST /api/notes          -> create note
 import {
   json, ok, fail, unauthorized, getEnv, now, randomId,
-  kvGetJSON, kvPutJSON, invalidateNoteCache, validateAdminPassword
+  kvGetJSON, kvPutJSON, invalidateNoteCache, validateAdminPassword,
+  normalizeCategory, normalizeTags, parseTagsJson
 } from '../_lib.js';
 
 export async function onRequest(context) {
@@ -24,12 +25,14 @@ async function handleList(context) {
   if (cached) return ok(cached);
 
   const { results } = await context.env.DB.prepare(
-    'SELECT id, title, created_at, updated_at FROM notes ORDER BY updated_at DESC'
+    'SELECT id, title, category, tags, created_at, updated_at FROM notes ORDER BY updated_at DESC'
   ).all();
 
   const data = results.map((r) => ({
     id: r.id,
     title: r.title,
+    category: r.category || '',
+    tags: parseTagsJson(r.tags),
     createdAt: r.created_at,
     updatedAt: r.updated_at
   }));
@@ -47,15 +50,17 @@ async function handleCreate(context) {
   }
   const title = typeof body.title === 'string' ? body.title.trim().slice(0, 200) : '';
   const content = typeof body.content === 'string' ? body.content : '';
+  const category = normalizeCategory(body.category);
+  const tags = normalizeTags(body.tags);
   const id = randomId();
   const ts = now();
 
   await context.env.DB.prepare(
-    'INSERT INTO notes (id, title, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
-  ).bind(id, title || 'Untitled', content, ts, ts).run();
+    'INSERT INTO notes (id, title, category, tags, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).bind(id, title || 'Untitled', category, JSON.stringify(tags), content, ts, ts).run();
 
   await invalidateNoteCache(context.env.CACHE, id);
-  const note = { id, title: title || 'Untitled', content, createdAt: ts, updatedAt: ts };
+  const note = { id, title: title || 'Untitled', category, tags, content, createdAt: ts, updatedAt: ts };
   return json({ ok: true, data: note }, 201);
 }
 
