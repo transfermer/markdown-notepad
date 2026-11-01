@@ -409,104 +409,99 @@
   }
 
   // ---------------- Markdown toolbar ----------------
-  // Each insert() receives (before, selected, after) and returns { value, pos }.
-  const TOOLBAR = [
-    { label: 'H1', title: 'Heading 1', insert: () => wrapLine('# ', '', 1) },
-    { label: 'H2', title: 'Heading 2', insert: () => wrapLine('## ', '', 2) },
-    { label: 'H3', title: 'Heading 3', insert: () => wrapLine('### ', '', 3) },
-    { sep: true },
-    { label: 'B', title: 'Bold', insert: () => wrap('**', '**', 'bold') },
-    { label: 'I', title: 'Italic', insert: () => wrap('_', '_', 'italic') },
-    { label: 'S', title: 'Strikethrough', insert: () => wrap('~~', '~~', 'struck') },
-    { label: '`', title: 'Inline code', insert: () => wrap('`', '`', 'code') },
-    { sep: true },
-    { label: '❝', title: 'Blockquote', insert: () => blockquote() },
-    { label: '•', title: 'Bullet list', insert: () => linePrefix('- ', 'item') },
-    { label: '1.', title: 'Numbered list', insert: () => numberedList() },
-    { label: '☑', title: 'Task list', insert: () => linePrefix('- [ ] ', 'task') },
-    { sep: true },
-    { label: '⛓', title: 'Link', insert: () => wrap('[', '](https://)', 'text') },
-    { label: '🖼', title: 'Image', insert: () => wrap('![', '](https://)', 'alt') },
-    { sep: true },
-    { label: '{}', title: 'Code block', insert: () => codeBlock() },
-    { label: '≣', title: 'Table', insert: () => table() },
-    { label: '―', title: 'Horizontal rule', insert: () => horizontalRule() }
-  ];
-
-  function buildToolbar() {
-    mdToolbar.innerHTML = '';
-    TOOLBAR.forEach((item) => {
-      if (item.sep) {
-        const div = document.createElement('div');
-        div.className = 'sep';
-        mdToolbar.appendChild(div);
-        return;
-      }
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'tb-btn';
-      btn.textContent = item.label;
-      btn.title = item.title || item.label;
-      btn.addEventListener('click', () => {
-        applyToTextarea(noteContent, item.insert);
-        noteContent.focus();
-        markDirty();
-        renderPreview();
-      });
-      mdToolbar.appendChild(btn);
-    });
-  }
-  buildToolbar();
+  // Each insert fn receives (before, selected, after) and returns { value, pos, posEnd? }.
 
   function applyToTextarea(ta, fn) {
-    const start = ta.selectionStart;
-    const end = ta.selectionEnd;
+    if (!ta || typeof fn !== 'function') return;
+    const start = ta.selectionStart || 0;
+    const end = ta.selectionEnd || 0;
     const before = ta.value.slice(0, start);
     const selected = ta.value.slice(start, end);
     const after = ta.value.slice(end);
-    const { value, pos } = fn(before, selected, after);
-    ta.value = value;
-    try { ta.setSelectionRange(pos, pos); } catch {}
+    let result = fn(before, selected, after);
+    if (typeof result === 'function') result = result(before, selected, after);
+    if (!result || typeof result.value !== 'string') return;
+    ta.value = result.value;
+    const pos = Number.isFinite(result.pos) ? result.pos : result.value.length;
+    const posEnd = Number.isFinite(result.posEnd) ? result.posEnd : pos;
+    try { ta.setSelectionRange(pos, posEnd); } catch {}
   }
 
-  /** Wrap selection with pre/post; use placeholder when nothing is selected. */
-  function wrap(pre, post, placeholder) {
-    return (before, selected, after) => {
-      const content = selected || placeholder || '';
-      const value = before + pre + content + post + after;
-      return { value, pos: before.length + pre.length + content.length + post.length };
+  function expandToCurrentLine(before, selected, after) {
+    if (selected) return { before, selected, after };
+    const lineStart = before.lastIndexOf('\n') + 1;
+    const nl = after.indexOf('\n');
+    const lineAfter = nl === -1 ? after : after.slice(0, nl);
+    return {
+      before: before.slice(0, lineStart),
+      selected: before.slice(lineStart) + lineAfter,
+      after: nl === -1 ? '' : after.slice(nl)
     };
   }
 
-  /** Prefix selected lines (or a placeholder line) with `pre`. */
+  function wrap(pre, post, placeholder) {
+    return (before, selected, after) => {
+      const content = selected || placeholder || '';
+      const innerStart = before.length + pre.length;
+      const value = before + pre + content + post + after;
+      if (selected) {
+        return { value, pos: innerStart + content.length + post.length };
+      }
+      return { value, pos: innerStart, posEnd: innerStart + content.length };
+    };
+  }
+
   function wrapLine(pre, post, level) {
     return (before, selected, after) => {
-      const content = (selected || ('Heading ' + level));
-      const lines = content.split('\n').map((l) => pre + l + post).join('\n');
-      const value = before + lines + after;
-      return { value, pos: before.length + lines.length };
+      const expanded = expandToCurrentLine(before, selected, after);
+      const headingRe = /^(#{1,6})\s+/;
+      const content = expanded.selected || ('Heading ' + level);
+      const lines = content.split('\n').map((l) => {
+        const existing = (l.match(headingRe) || [])[1];
+        const stripped = l.replace(headingRe, '');
+        if (existing && existing.length === level) return stripped;
+        return pre + stripped + (post || '');
+      }).join('\n');
+      const value = expanded.before + lines + expanded.after;
+      return {
+        value,
+        pos: expanded.before.length,
+        posEnd: expanded.before.length + lines.length
+      };
     };
   }
 
   function linePrefix(prefix, placeholder) {
     return (before, selected, after) => {
-      const content = selected || placeholder;
-      const lines = content.split('\n').map((l) => prefix + l).join('\n');
-      const value = before + lines + after;
-      return { value, pos: before.length + lines.length };
+      const expanded = expandToCurrentLine(before, selected, after);
+      const content = expanded.selected || placeholder || '';
+      const lines = content.split('\n').map((l) => {
+        if (l.startsWith(prefix)) return l;
+        return prefix + l;
+      }).join('\n');
+      const value = expanded.before + lines + expanded.after;
+      return {
+        value,
+        pos: expanded.before.length,
+        posEnd: expanded.before.length + lines.length
+      };
     };
-  }
-
-  function blockquote() {
-    return linePrefix('> ', 'quote');
   }
 
   function numberedList() {
     return (before, selected, after) => {
-      const content = selected || 'item';
-      const lines = content.split('\n').map((l, i) => `${i + 1}. ${l}`).join('\n');
-      const value = before + lines + after;
-      return { value, pos: before.length + lines.length };
+      const expanded = expandToCurrentLine(before, selected, after);
+      const content = expanded.selected || 'item';
+      const lines = content.split('\n').map((l, i) => {
+        if (/^\d+\.\s/.test(l)) return l;
+        return (i + 1) + '. ' + l.replace(/^[-*+]\s+/, '').replace(/^\d+\.\s+/, '');
+      }).join('\n');
+      const value = expanded.before + lines + expanded.after;
+      return {
+        value,
+        pos: expanded.before.length,
+        posEnd: expanded.before.length + lines.length
+      };
     };
   }
 
@@ -515,7 +510,11 @@
       const content = selected || 'code here';
       const block = '```js\n' + content + '\n```';
       const value = before + block + after;
-      return { value, pos: before.length + block.length };
+      if (selected) {
+        return { value, pos: before.length + block.length };
+      }
+      const inner = before.length + '```js\n'.length;
+      return { value, pos: inner, posEnd: inner + content.length };
     };
   }
 
@@ -535,6 +534,55 @@
       return { value, pos: before.length + t.length };
     };
   }
+
+  const TOOLBAR = [
+    { label: 'H1', title: 'Heading 1', insert: wrapLine('# ', '', 1) },
+    { label: 'H2', title: 'Heading 2', insert: wrapLine('## ', '', 2) },
+    { label: 'H3', title: 'Heading 3', insert: wrapLine('### ', '', 3) },
+    { sep: true },
+    { label: 'B', title: 'Bold', insert: wrap('**', '**', 'bold') },
+    { label: 'I', title: 'Italic', insert: wrap('_', '_', 'italic') },
+    { label: 'S', title: 'Strikethrough', insert: wrap('~~', '~~', 'struck') },
+    { label: '`', title: 'Inline code', insert: wrap('`', '`', 'code') },
+    { sep: true },
+    { label: '❝', title: 'Blockquote', insert: linePrefix('> ', 'quote') },
+    { label: '•', title: 'Bullet list', insert: linePrefix('- ', 'item') },
+    { label: '1.', title: 'Numbered list', insert: numberedList() },
+    { label: '☑', title: 'Task list', insert: linePrefix('- [ ] ', 'task') },
+    { sep: true },
+    { label: '⛓', title: 'Link', insert: wrap('[', '](https://)', 'text') },
+    { label: '🖼', title: 'Image', insert: wrap('![', '](https://)', 'alt') },
+    { sep: true },
+    { label: '{}', title: 'Code block', insert: codeBlock() },
+    { label: '≣', title: 'Table', insert: table() },
+    { label: '―', title: 'Horizontal rule', insert: horizontalRule() }
+  ];
+
+  function buildToolbar() {
+    mdToolbar.innerHTML = '';
+    TOOLBAR.forEach((item) => {
+      if (item.sep) {
+        const div = document.createElement('div');
+        div.className = 'sep';
+        mdToolbar.appendChild(div);
+        return;
+      }
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'tb-btn';
+      btn.textContent = item.label;
+      btn.title = item.title || item.label;
+      btn.addEventListener('mousedown', (e) => e.preventDefault());
+      btn.addEventListener('click', () => {
+        applyToTextarea(noteContent, item.insert);
+        noteContent.focus();
+        markDirty();
+        renderPreview();
+      });
+      mdToolbar.appendChild(btn);
+    });
+  }
+  buildToolbar();
 
   // ---------------- Delete ----------------
   btnDelete.addEventListener('click', async () => {
