@@ -8,6 +8,22 @@
     breaks: true
   });
 
+  const IMAGE_URL_RE = /^(https?:\/\/|\/\/|\/|data:image\/).+\.(png|jpe?g|gif|webp|svg|bmp|avif|ico)(\?.*)?$/i;
+  const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|bmp|avif|ico)(\?|#|$)/i;
+
+  function isImageUrl(url) {
+    if (!url || typeof url !== 'string') return false;
+    const trimmed = url.trim();
+    if (trimmed.startsWith('data:image/')) return true;
+    if (IMAGE_URL_RE.test(trimmed)) return true;
+    try {
+      const u = new URL(trimmed, window.location.origin);
+      return IMAGE_EXT_RE.test(u.pathname);
+    } catch {
+      return IMAGE_EXT_RE.test(trimmed);
+    }
+  }
+
   // ---------------- State ----------------
   const state = {
     notes: [],        // list of { id, title, category, tags, updatedAt }
@@ -326,8 +342,47 @@
     return state.notes.find((n) => n.id === state.currentId) || null;
   }
 
+  function promoteImageLinks(root) {
+    if (!root) return;
+    root.querySelectorAll('a').forEach((a) => {
+      if (a.querySelector('img')) return;
+      const href = a.getAttribute('href') || '';
+      if (!isImageUrl(href)) return;
+      const text = (a.textContent || '').trim();
+      const looksLikeBareUrl = !text || text === href || text === 'alt' || text === 'image' || text === 'img' || text === 'text';
+      if (!looksLikeBareUrl) return;
+      const img = document.createElement('img');
+      img.src = href;
+      img.alt = looksLikeBareUrl && text && text !== href ? text : '';
+      a.replaceWith(img);
+    });
+  }
+
   function renderPreview() {
     notePreview.innerHTML = md.render(noteContent.value || '');
+    promoteImageLinks(notePreview);
+  }
+
+  function isPreviewMode() {
+    return !notePreview.classList.contains('hidden');
+  }
+
+  function setPreviewMode(on) {
+    if (on) {
+      renderPreview();
+      notePreview.classList.remove('hidden');
+      noteContent.classList.add('hidden');
+      if (mdToolbar) mdToolbar.classList.add('hidden');
+      btnPreview.textContent = 'Edit';
+      btnPreview.title = 'Back to editor';
+    } else {
+      notePreview.classList.add('hidden');
+      noteContent.classList.remove('hidden');
+      if (mdToolbar) mdToolbar.classList.remove('hidden');
+      btnPreview.textContent = 'Preview';
+      btnPreview.title = 'Toggle preview';
+      noteContent.focus();
+    }
   }
 
   btnNew.addEventListener('click', async () => {
@@ -518,6 +573,32 @@
     };
   }
 
+  function insertImage() {
+    return (before, selected, after) => {
+      const sel = (selected || '').trim();
+      if (sel && isImageUrl(sel)) {
+        const snippet = '![](' + sel + ')';
+        return { value: before + snippet + after, pos: before.length + snippet.length };
+      }
+      if (sel) {
+        const snippet = '![' + sel + '](https://)';
+        const urlStart = before.length + 2 + sel.length + 2;
+        return {
+          value: before + snippet + after,
+          pos: urlStart,
+          posEnd: urlStart + 'https://'.length
+        };
+      }
+      const snippet = '![](https://)';
+      const urlStart = before.length + 4;
+      return {
+        value: before + snippet + after,
+        pos: urlStart,
+        posEnd: urlStart + 'https://'.length
+      };
+    };
+  }
+
   function table() {
     return (before, selected, after) => {
       const firstCol = (selected || 'Column 1').replace(/\n/g, ' ');
@@ -550,8 +631,8 @@
     { label: '1.', title: 'Numbered list', insert: numberedList() },
     { label: '☑', title: 'Task list', insert: linePrefix('- [ ] ', 'task') },
     { sep: true },
-    { label: '⛓', title: 'Link', insert: wrap('[', '](https://)', 'text') },
-    { label: '🖼', title: 'Image', insert: wrap('![', '](https://)', 'alt') },
+    { label: 'Link', title: 'Link', insert: wrap('[', '](https://)', 'text') },
+    { label: 'Image', title: 'Image', insert: insertImage() },
     { sep: true },
     { label: '{}', title: 'Code block', insert: codeBlock() },
     { label: '≣', title: 'Table', insert: table() },
@@ -604,8 +685,43 @@
 
   // ---------------- Preview toggle ----------------
   btnPreview.addEventListener('click', () => {
-    notePreview.classList.toggle('hidden');
-    btnPreview.textContent = notePreview.classList.contains('hidden') ? '👁 Preview' : '✎ Edit';
+    setPreviewMode(!isPreviewMode());
+  });
+
+  noteContent.addEventListener('paste', (e) => {
+    const items = e.clipboardData && e.clipboardData.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      if (!item.type || item.type.indexOf('image/') !== 0) continue;
+      const file = item.getAsFile();
+      if (!file) continue;
+      e.preventDefault();
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = reader.result;
+        if (typeof dataUrl !== 'string') return;
+        applyToTextarea(noteContent, (before, selected, after) => {
+          const snippet = '![](' + dataUrl + ')';
+          return { value: before + snippet + after, pos: before.length + snippet.length };
+        });
+        markDirty();
+        renderPreview();
+      };
+      reader.readAsDataURL(file);
+      return;
+    }
+    const text = e.clipboardData.getData('text/plain');
+    if (text && isImageUrl(text.trim()) && !(noteContent.value.slice(0, noteContent.selectionStart).endsWith(']('))) {
+      e.preventDefault();
+      applyToTextarea(noteContent, (before, selected, after) => {
+        const url = text.trim();
+        const snippet = '![](' + url + ')';
+        return { value: before + snippet + after, pos: before.length + snippet.length };
+      });
+      markDirty();
+      renderPreview();
+    }
   });
 
   // ---------------- Share ----------------

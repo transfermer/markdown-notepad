@@ -38,6 +38,24 @@ const SHARE_PAGE = `<!DOCTYPE html>
   <script>
     (function () {
       var md = window.markdownit({ html: true, linkify: true, breaks: true });
+      function isImageUrl(url) {
+        if (!url) return false;
+        if (/^data:image\//i.test(url)) return true;
+        return /\.(png|jpe?g|gif|webp|svg|bmp|avif|ico)(\?|#|$)/i.test(url);
+      }
+      function promoteImageLinks(root) {
+        root.querySelectorAll('a').forEach(function (a) {
+          if (a.querySelector('img')) return;
+          var href = a.getAttribute('href') || '';
+          if (!isImageUrl(href)) return;
+          var text = (a.textContent || '').trim();
+          if (text && text !== href && text !== 'alt' && text !== 'image' && text !== 'img') return;
+          var img = document.createElement('img');
+          img.src = href;
+          img.alt = '';
+          a.replaceWith(img);
+        });
+      }
       var token = location.pathname.split('/').filter(Boolean).pop();
       fetch('/api/shared/' + encodeURIComponent(token))
         .then(function (r) { return r.json(); })
@@ -47,7 +65,9 @@ const SHARE_PAGE = `<!DOCTYPE html>
           document.getElementById('note-title').textContent = d.title || 'Untitled';
           var meta = 'Updated ' + new Date(d.updatedAt).toLocaleString();
           document.getElementById('note-meta').textContent = meta;
-          document.getElementById('note-body').innerHTML = md.render(d.content || '');
+          var body = document.getElementById('note-body');
+          body.innerHTML = md.render(d.content || '');
+          promoteImageLinks(body);
           document.getElementById('btn-dl').addEventListener('click', function () {
             var blob = new Blob([d.content || ''], { type: 'text/markdown;charset=utf-8' });
             var a = document.createElement('a');
