@@ -73,6 +73,7 @@
   const btnShareCopy = $('#btn-share-copy');
   const btnShareCancel = $('#btn-share-cancel');
   const toolsPane = $('#tools-pane');
+  const appLayout = $('#app-layout');
   const btnToolsToggle = $('#btn-tools-toggle');
   const btnBackList = $('#btn-back-list');
   const mobileMq = window.matchMedia('(max-width: 820px)');
@@ -81,10 +82,14 @@
     return mobileMq.matches;
   }
 
-  function setToolsCollapsed(collapsed) {
+  function setToolsCollapsed(collapsed, persist) {
     if (!toolsPane || !btnToolsToggle) return;
     toolsPane.classList.toggle('collapsed', collapsed);
+    if (appLayout) appLayout.classList.toggle('tools-collapsed', collapsed);
     btnToolsToggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+    if (persist && !isMobile()) {
+      try { localStorage.setItem('toolsCollapsed', collapsed ? '1' : '0'); } catch {}
+    }
   }
 
   function showMobileList() {
@@ -95,12 +100,16 @@
     if (isMobile()) mainView.classList.add('mobile-editor');
   }
 
+  function desktopToolsCollapsedPref() {
+    try { return localStorage.getItem('toolsCollapsed') === '1'; } catch { return false; }
+  }
+
   function syncLayoutMode() {
     if (isMobile()) {
       setToolsCollapsed(true);
       if (!state.currentId || editorView.classList.contains('hidden')) showMobileList();
     } else {
-      setToolsCollapsed(false);
+      setToolsCollapsed(desktopToolsCollapsedPref());
       mainView.classList.remove('mobile-editor');
     }
   }
@@ -847,7 +856,7 @@
 
   if (btnToolsToggle) {
     btnToolsToggle.addEventListener('click', () => {
-      setToolsCollapsed(!toolsPane.classList.contains('collapsed'));
+      setToolsCollapsed(!toolsPane.classList.contains('collapsed'), true);
     });
   }
 
