@@ -25,9 +25,10 @@
     </section>
 
     <!-- Main app -->
-    <section id="main-view" class="view hidden">
+    <section id="main-view" class="view main-view hidden">
       <header class="topbar">
         <div class="topbar-left">
+          <button id="btn-back-list" class="btn ghost btn-back-list" type="button" title="Back to notes">Notes</button>
           <h1 class="brand">📝 Markdown Notepad</h1>
           <button id="btn-new" class="btn primary" title="New note">+ New</button>
         </div>
@@ -38,33 +39,37 @@
         </div>
       </header>
 
-      <div class="layout">
-        <!-- Sidebar: filters + categories + tags + note list -->
+      <div class="layout" id="app-layout">
         <aside class="sidebar">
-          <input type="search" id="search" class="search" placeholder="Search notes..." autocomplete="off">
-
-          <!-- Quick tools -->
-          <div class="side-section">
-            <div class="side-section-title">Quick tools</div>
-            <button class="quick-tool active" data-filter="all">📋 All notes <span class="count" id="count-all"></span></button>
-            <button class="quick-tool" data-filter="uncategorized">🗂 Uncategorized</button>
-            <button class="quick-tool" data-filter="untagged">🏷 Untagged</button>
+          <div class="tools-pane collapsed" id="tools-pane">
+            <button type="button" id="btn-tools-toggle" class="tools-toggle" aria-expanded="false" aria-controls="tools-pane-body">
+              <span>Quick tools</span>
+              <span class="tools-toggle-icon" aria-hidden="true"></span>
+            </button>
+            <div class="side-section-title tools-desktop-title">Quick tools</div>
+            <div class="tools-pane-body" id="tools-pane-body">
+              <div class="side-section">
+                <button class="quick-tool active" data-filter="all">All notes <span class="count" id="count-all"></span></button>
+                <button class="quick-tool" data-filter="uncategorized">Uncategorized</button>
+                <button class="quick-tool" data-filter="untagged">Untagged</button>
+              </div>
+              <div class="side-section">
+                <div class="side-section-title">Categories</div>
+                <div id="category-list" class="tag-cloud"><span class="muted small">None yet</span></div>
+              </div>
+              <div class="side-section">
+                <div class="side-section-title">Tags</div>
+                <div id="tag-list" class="tag-cloud"><span class="muted small">None yet</span></div>
+              </div>
+            </div>
           </div>
 
-          <!-- Categories -->
-          <div class="side-section">
-            <div class="side-section-title">📁 Categories</div>
-            <div id="category-list" class="tag-cloud"><span class="muted small">None yet</span></div>
+          <div class="notes-pane">
+            <div class="side-section-title notes-pane-title">Notes</div>
+            <input type="search" id="search" class="search" placeholder="Search notes..." autocomplete="off">
+            <div id="note-count" class="note-count muted"></div>
+            <ul id="note-list" class="note-list"></ul>
           </div>
-
-          <!-- Tags -->
-          <div class="side-section">
-            <div class="side-section-title">🏷 Tags</div>
-            <div id="tag-list" class="tag-cloud"><span class="muted small">None yet</span></div>
-          </div>
-
-          <div id="note-count" class="note-count muted"></div>
-          <ul id="note-list" class="note-list"></ul>
         </aside>
 
         <!-- Editor / viewer -->

@@ -72,6 +72,38 @@
   const shareStatus = $('#share-status');
   const btnShareCopy = $('#btn-share-copy');
   const btnShareCancel = $('#btn-share-cancel');
+  const toolsPane = $('#tools-pane');
+  const btnToolsToggle = $('#btn-tools-toggle');
+  const btnBackList = $('#btn-back-list');
+  const mobileMq = window.matchMedia('(max-width: 820px)');
+
+  function isMobile() {
+    return mobileMq.matches;
+  }
+
+  function setToolsCollapsed(collapsed) {
+    if (!toolsPane || !btnToolsToggle) return;
+    toolsPane.classList.toggle('collapsed', collapsed);
+    btnToolsToggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  }
+
+  function showMobileList() {
+    mainView.classList.remove('mobile-editor');
+  }
+
+  function showMobileEditor() {
+    if (isMobile()) mainView.classList.add('mobile-editor');
+  }
+
+  function syncLayoutMode() {
+    if (isMobile()) {
+      setToolsCollapsed(true);
+      if (!state.currentId || editorView.classList.contains('hidden')) showMobileList();
+    } else {
+      setToolsCollapsed(false);
+      mainView.classList.remove('mobile-editor');
+    }
+  }
 
   // ---------------- API helper ----------------
   async function api(path, options = {}) {
@@ -102,6 +134,7 @@
   async function showApp() {
     loginView.classList.add('hidden');
     mainView.classList.remove('hidden');
+    syncLayoutMode();
     await Promise.all([refreshIndex(), refreshNotes()]);
   }
 
@@ -149,9 +182,15 @@
       state.notes = notes || [];
       renderNotes(filterNotes());
       if (!state.currentId && state.notes.length > 0) {
-        openNote(state.notes[0].id);
+        if (isMobile()) {
+          showEmpty();
+          showMobileList();
+        } else {
+          openNote(state.notes[0].id);
+        }
       } else if (state.notes.length === 0) {
         showEmpty();
+        showMobileList();
       }
     } catch (err) {
       // Could be a stale session.
@@ -225,6 +264,7 @@
     state.filter = f;
     renderIndex();
     renderNotes(filterNotes());
+    if (isMobile()) setToolsCollapsed(true);
   }
 
   // Quick tool buttons (aside)
@@ -309,6 +349,7 @@
   function showEmpty() {
     emptyState.classList.remove('hidden');
     editorView.classList.add('hidden');
+    showMobileList();
   }
 
   // ---------------- Notes: open / create / save ----------------
@@ -319,6 +360,7 @@
     renderNotes(filterNotes());
     emptyState.classList.add('hidden');
     editorView.classList.remove('hidden');
+    showMobileEditor();
     loadNoteIntoUi(id);
   }
 
@@ -802,6 +844,25 @@
     state.search = searchInput.value;
     renderNotes(filterNotes());
   });
+
+  if (btnToolsToggle) {
+    btnToolsToggle.addEventListener('click', () => {
+      setToolsCollapsed(!toolsPane.classList.contains('collapsed'));
+    });
+  }
+
+  if (btnBackList) {
+    btnBackList.addEventListener('click', async () => {
+      await flushSave();
+      showMobileList();
+    });
+  }
+
+  if (typeof mobileMq.addEventListener === 'function') {
+    mobileMq.addEventListener('change', syncLayoutMode);
+  } else if (typeof mobileMq.addListener === 'function') {
+    mobileMq.addListener(syncLayoutMode);
+  }
 
   // ---------------- Init ----------------
   async function init() {
