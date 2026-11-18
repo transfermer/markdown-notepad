@@ -8,9 +8,12 @@ A self-hosted, Cloudflare-deployable **markdown notepad reader & editor**.
 - **Cache:** Cloudflare KV (list + note + shared-note reads, session tokens)
 - **Auth:** Admin login with a password (HttpOnly session cookie)
 - **Editor:** Full-height editor + live preview, markdown toolbar (headings, bold/italic, lists, links, code blocks, tables), category + tags, search, quick filters
+- **AI assistant (optional):** OpenAI-compatible provider proxy with encrypted API key; actions: Improve, Rewrite, Summarize, Outline, Expand, Title, Tags, Translate, Custom
+- **MCP server (remote):** Streamable HTTP JSON-RPC 2.0 with read/write scoped Bearer tokens
 - **Organization:** Categories (`category`) + tags (`tags`) per note; sidebar shows categories/tags as quick tools with counts
 - **Share:** Public read-only links (`/s/:token`)
 - **Local export:** Every note can be downloaded as a `.md` file
+- **XSS protection:** All markdown rendered through DOMPurify (vendored locally); HTML and JS are sanitized, share page escapes unsafe markup
 - **WebDAV backup (optional):** Push notes to a WebDAV server via `WEBDAV_URL`
 
 **No secrets or resource IDs are committed to this repo.** All D1/KV bindings,
@@ -25,15 +28,20 @@ Cloudflare secrets) — see [Security](#5-security--what-goes-where).
 Browser ──▶ Pages static site (public/)
               │
               ├── /api/*  (Pages Functions)
-              │     ├── auth/login|logout|check  → session cookie (KV)
-              │     ├── notes  (list/create)     → D1 + KV cache
-              │     ├── notes/:id (get/put/del)  → D1 + KV cache + WebDAV push
-              │     ├── index (categories/tags)  → D1 + KV cache
-              │     ├── shared (create token)    → D1
-              │     ├── shared/:token (public)   → D1 + KV cache
-              │     ├── backup/:id (WebDAV)      → optional
-              │     └── health                    → config probe
-              └── /s/:token  public share page
+              │     ├── auth/login|logout|check   → session cookie (KV, rate-limited)
+              │     ├── notes  (list/create)      → D1 + KV cache
+              │     ├── notes/:id (get/put/del)   → D1 + KV cache + WebDAV push
+              │     ├── index (categories/tags)   → D1 + KV cache
+              │     ├── shared (create token)     → D1
+              │     ├── shared/:token (public)    → D1 + KV cache
+              │     ├── ai/config (get/put)       → provider config (key encrypted at rest)
+              │     ├── ai/complete (post)        → server-side AI proxy (timeout-guarded)
+              │     ├── tokens (get/post)         → MCP Bearer tokens (hash-only storage)
+              │     ├── tokens/:id (delete)       → revoke token
+              │     ├── mcp (post)                → remote MCP (Streamable HTTP, scoped tools)
+              │     ├── backup/:id (WebDAV)       → optional
+              │     └── health                     → config probe
+              └── /s/:token  public share page (XSS-sanitized)
 ```
 
 ### Why KV?
@@ -94,6 +102,8 @@ Go to Pages → **your project** → **Settings** → **Bindings** (or **Functio
 | KV binding | `CACHE`       | *select your KV namespace*     | cache + sessions         |
 | Secret     | `ADMIN_PASSWORD` | your login password         | web admin login          |
 | Secret     | `SESSION_SECRET` | random string (optional)    | future signing needs     |
+| Secret     | `AI_CONFIG_SECRET` | random string (recommended) | encrypt the stored AI API key |
+| Var        | `AI_TIMEOUT_MS`  | e.g. `60000` (optional)     | bound each AI provider call (default 60000) |
 | Secret     | `WEBDAV_URL`     | e.g. `https://dav.example.com/backup` | optional backup |
 | Secret     | `WEBDAV_USERNAME`| *(if needed)*                | optional backup          |
 | Secret     | `WEBDAV_PASSWORD`| *(if needed)*                | optional backup          |
@@ -115,6 +125,8 @@ npx wrangler d1 execute markdown-notepad-db --remote --file=./schema.sql
 > ALTER TABLE notes ADD COLUMN category TEXT NOT NULL DEFAULT '';
 > ALTER TABLE notes ADD COLUMN tags    TEXT NOT NULL DEFAULT '[]';
 > ```
+> The `settings` and `api_tokens` tables are created automatically by
+> `schema.sql` (`CREATE TABLE IF NOT EXISTS`), so no ALTER is needed for them.
 
 ### 1.6 Done 🎉
 
@@ -164,7 +176,85 @@ From any note: **🔗 Share** → server creates an unguessable token (`shares` 
 
 ---
 
-## 5. Security / what goes where
+## 5. AI writing assistant (optional)
+
+Open **Settings** in the top bar to connect any OpenAI-compatible provider
+(base URL, model, API key). The key is sent once to the server, **encrypted at
+rest** (PBKDF2 + AES-GCM using `AI_CONFIG_SECRET`), and never returned to the
+browser — settings only expose `hasKey` and a masked preview.
+
+Then use the **AI** button in the editor to run actions on the whole note or the
+current selection: Improve, Rewrite, Summarize, Outline, Expand, Title, Tags,
+Translate, or a custom instruction. Results are shown first and only applied to
+the note when you press **Apply**.
+
+- All provider calls go through the server proxy `POST /api/ai/complete`; the
+  key never reaches the browser.
+- The user-supplied base URL is checked against private/loopback/link-local
+  ranges (SSRF guard) before any request is made.
+- If `AI_CONFIG_SECRET` is unset the app falls back to `SESSION_SECRET` or
+  `ADMIN_PASSWORD` for encryption, but a dedicated secret is recommended.
+- Each provider call is bounded by `AI_TIMEOUT_MS` (default 60s). On timeout the
+  API returns a clean `504` / `UPSTREAM_TIMEOUT` error instead of hanging until
+  the edge proxy times out (`524`) — a shorter note, lower `max tokens` (capped
+  at 4096), or a faster model will help. Input is capped at 12000 chars per call.
+
+---
+
+## 6. MCP server (remote)
+
+`POST /api/mcp` is a remote [Model Context Protocol](https://modelcontextprotocol.io)
+server over Streamable HTTP (JSON-RPC 2.0), authenticated with a Bearer token.
+Each token has a **scope**: `read` (read-only tools) or `write` (read + write
+tools). Create/revoke tokens (admin session required):
+
+```bash
+# create a read-only token (plaintext is returned once)
+curl -X POST https://<project>.pages.dev/api/tokens \
+  -H "Cookie: mdnote_session=<session>" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"my-agent","scope":"read"}'
+
+# create a token that may also modify notes
+
+curl -X POST https://<project>.pages.dev/api/tokens \
+  -H "Cookie: mdnote_session=<session>" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"my-writer","scope":"write"}'
+
+# list tokens (metadata only)
+
+curl https://<project>.pages.dev/api/tokens -H "Cookie: mdnote_session=<session>"
+
+# revoke a token
+
+curl -X DELETE https://<project>.pages.dev/api/tokens/<id> -H "Cookie: mdnote_session=<session>"
+```
+
+Point your MCP client at `https://<project>.pages.dev/api/mcp` with
+`Authorization: Bearer mdn_...`. Available tools:
+
+| Tool              | Scope | Arguments                                   | Returns                        |
+|-------------------|-------|---------------------------------------------|--------------------------------|
+| `list_notes`      | read  | `limit?`                                    | note metadata, newest first    |
+| `get_note`        | read  | `id`                                        | full note including markdown   |
+| `search_notes`    | read  | `query`, `limit?`                           | matching note metadata         |
+| `list_categories` | read  | –                                           | category/tag counts            |
+| `create_note`     | write | `title?`, `content?`, `category?`, `tags?`  | the created note               |
+| `update_note`     | write | `id`, `title?`, `content?`, `category?`, `tags?` | the updated note          |
+| `append_to_note`  | write | `id`, `text`                                | the updated note               |
+| `delete_note`     | write | `id`                                        | `{ id, deleted: true }`        |
+
+`tools/list` only advertises the tools the token is allowed to call, and a
+read token receives a JSON-RPC error (`-32003`) if it tries a write tool.
+
+Only a SHA-256 **hash** of each token is stored (`api_tokens` table); the
+plaintext is shown once at creation. Prefer `read` tokens for agents that only
+need to look things up.
+
+---
+
+## 7. Security / what goes where
 
 | Item                          | Location                                      | In git? |
 |-------------------------------|-----------------------------------------------|---------|
@@ -172,7 +262,10 @@ From any note: **🔗 Share** → server creates an unguessable token (`shares` 
 | KV namespace id               | Dashboard → Bindings                          | ❌      |
 | `ADMIN_PASSWORD`              | Dashboard → Secret (or `wrangler pages secret put`) | ❌ |
 | `SESSION_SECRET`              | Dashboard → Secret                            | ❌      |
+| `AI_CONFIG_SECRET`            | Dashboard → Secret                            | ❌      |
 | `WEBDAV_*`                    | Dashboard → Secret                            | ❌      |
+| AI provider API key           | D1 `settings` (encrypted AES-GCM)             | ❌      |
+| MCP API tokens                | D1 `api_tokens` (SHA-256 hash only)           | ❌      |
 | `wrangler.toml`               | local only (`cp wrangler.toml.example wrangler.toml`) | ❌ |
 | `wrangler.toml.example`       | repo (placeholders only)                      | ✅      |
 
@@ -182,12 +275,11 @@ Other notes:
   secret with a timing-safe comparator.
 - Session cookies: `HttpOnly`, `SameSite=Lax`, `Secure`, 7-day TTL in KV.
 - Share tokens are 40 hex chars from `crypto.getRandomValues`.
-- For a production personal notepad, add a WAF/rate-limit rule on
-  `/api/auth/login`.
+- Login is rate-limited in-app: 5 failed attempts within 15 minutes return `429` (`RATE_LIMITED`) per client IP. For production, also add a WAF/rate-limit rule on `/api/auth/login`.
 
 ---
 
-## 6. API summary
+## 8. API summary
 
 | Method | Path                | Auth | Description                          |
 |--------|---------------------|------|--------------------------------------|
@@ -204,23 +296,31 @@ Other notes:
 | GET    | `/api/shared/:token`| –    | public note payload (KV-cached)      |
 | POST   | `/api/backup/:id`   | ✓    | manual WebDAV push                   |
 | GET    | `/api/health`       | –    | service + webdav config              |
+| GET    | `/api/ai/config`    | ✓    | masked AI config (`hasKey`, preview) |
+| PUT    | `/api/ai/config`    | ✓    | save AI config (`clearKey` to reset) |
+| POST   | `/api/ai/complete`  | ✓    | run an AI action via the server proxy |
+| GET    | `/api/tokens`       | ✓    | list MCP API tokens (metadata only)  |
+| POST   | `/api/tokens`       | ✓    | create a token (`scope` read/write, returned once) |
+| DELETE | `/api/tokens/:id`   | ✓    | revoke a token                       |
+| POST   | `/api/mcp`          | Bearer | remote MCP (JSON-RPC 2.0)          |
 
-Auth = HttpOnly cookie `mdnote_session` verified against KV.
+Auth = HttpOnly cookie `mdnote_session` verified against KV, or a Bearer API
+token for `/api/mcp`.
 
 ---
 
-## 7. Project layout
+## 9. Project layout
 
 ```
 ├── wrangler.toml.example     # TEMPLATE — placeholders only, safe to commit
 ├── wrangler.toml             # LOCAL ONLY (git-ignored) — your real IDs
 ├── .dev.vars                 # LOCAL ONLY (git-ignored) — local secrets
-├── schema.sql                # D1 schema (notes, shares)
+├── schema.sql                # D1 schema (notes, shares, settings, api_tokens)
 ├── public/                   # static site (Pages build output)
 │   ├── index.html
 │   ├── css/style.css
 │   ├── js/app.js
-│   └── vendor/markdown-it.min.js
+│   └── vendor/{markdown-it,dompurify}.min.js
 └── functions/                # Pages Functions
     ├── api/
     │   ├── _lib.js
@@ -229,13 +329,16 @@ Auth = HttpOnly cookie `mdnote_session` verified against KV.
     │   ├── notes/index.js, notes/[id].js
     │   ├── index/index.js      # category/tag aggregate
     │   ├── shared/index.js, shared/[token].js
+    │   ├── ai/_ai.js, ai/config.js, ai/complete.js
+    │   ├── tokens/_tokens.js, tokens/index.js, tokens/[id].js
+    │   ├── mcp/index.js        # remote MCP (Streamable HTTP)
     │   └── backup/[id].js
     └── s/[token].js          # public share page
 ```
 
-## 8. Tests
+## 10. Tests
 
 ```bash
-node test-api.mjs      # 22 end-to-end API tests (auth, notes, KV cache, shares, index)
+node test-api.mjs      # 63 end-to-end API tests (auth, notes, KV cache, shares, index, AI, MCP, login rate limiting)
 node test-webdav.mjs   # WebDAV backup against a local mock server
 ```

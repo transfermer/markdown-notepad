@@ -56,6 +56,7 @@ function makeEnv(overrides = {}) {
     CACHE: new KV(),
     ADMIN_PASSWORD: 'test-admin-password',
     SESSION_SECRET: 'test-secret',
+    AI_CONFIG_SECRET: 'test-ai-secret',
     WEBDAV_URL: '',
     WEBDAV_USERNAME: '',
     WEBDAV_PASSWORD: '',
@@ -67,6 +68,8 @@ class D1Stub {
   constructor() {
     this.notes = [];
     this.shares = [];
+    this.settings = [];
+    this.apiTokens = [];
     this.nextId = 1;
   }
   prepare(sql) {
@@ -102,6 +105,18 @@ class Statement {
       if (this.sql.includes('WHERE note_id = ?')) rows = rows.filter((r) => r.note_id === this.bindArgs[0]);
       return { results: rows };
     }
+    if (this.sql.includes('FROM settings')) {
+      let rows = [...this.db.settings];
+      if (this.sql.includes('WHERE key = ?')) rows = rows.filter((r) => r.key === this.bindArgs[0]);
+      return { results: rows };
+    }
+    if (this.sql.includes('FROM api_tokens')) {
+      let rows = [...this.db.apiTokens];
+      if (this.sql.includes('WHERE token_hash = ?')) rows = rows.filter((r) => r.token_hash === this.bindArgs[0]);
+      if (this.sql.includes('WHERE id = ?')) rows = rows.filter((r) => r.id === this.bindArgs[0]);
+      if (this.sql.includes('ORDER BY created_at')) rows.sort((a, b) => b.created_at - a.created_at);
+      return { results: rows };
+    }
     return { results: [] };
   }
   async first() {
@@ -118,6 +133,26 @@ class Statement {
     }
     if (sql.includes('INSERT INTO shares')) {
       this.db.shares.push({ token: a[0], note_id: a[1], created_at: a[2] });
+      return { success: true };
+    }
+    if (sql.includes('INSERT INTO settings')) {
+      const existing = this.db.settings.find((r) => r.key === a[0]);
+      if (existing) { existing.value = a[1]; existing.updated_at = a[2]; }
+      else this.db.settings.push({ key: a[0], value: a[1], updated_at: a[2] });
+      return { success: true };
+    }
+    if (sql.includes('INSERT INTO api_tokens')) {
+      this.db.apiTokens.push({ id: a[0], name: a[1], token_hash: a[2], prefix: a[3], scope: a[4], created_at: a[5], last_used: null });
+      return { success: true };
+    }
+    if (sql.includes('DELETE FROM api_tokens')) {
+      const id = a[0];
+      this.db.apiTokens = this.db.apiTokens.filter((x) => x.id !== id);
+      return { success: true };
+    }
+    if (sql.includes('UPDATE api_tokens')) {
+      const t = this.db.apiTokens.find((x) => x.id === a[a.length - 1]);
+      if (t) t.last_used = a[0];
       return { success: true };
     }
     if (sql.includes('UPDATE notes')) {
@@ -171,6 +206,16 @@ async function main() {
   const setCookie = login.headers.get('set-cookie') || '';
   const token = (setCookie.match(/mdnote_session=([^;]+)/) || [])[1];
   check('login accepts correct password', login.status === 200 && !!token);
+
+  // login rate limiting: MAX failures (401), then lock (429)
+  let last;
+  for (let i = 0; i < 5; i++) {
+    last = await callFunction('api/auth/login.js', { method: 'POST', body: { password: 'wrong' }, env: () => e });
+    check('login failure #' + (i + 1) + ' rejected', last.status === 401);
+  }
+  const locked = await callFunction('api/auth/login.js', { method: 'POST', body: { password: 'wrong' }, env: () => e });
+  const lockedData = await locked.json();
+  check('login locked after repeated failures', locked.status === 429 && lockedData.error.code === 'RATE_LIMITED');
 
   const authedHeaders = { cookie: `mdnote_session=${token}` };
 
@@ -247,6 +292,172 @@ async function main() {
   const health = await callFunction('api/health.js', { env: () => ({ DB: e.DB, CACHE: e.CACHE, ADMIN_PASSWORD: 'x', SESSION_SECRET: '', WEBDAV_URL: 'https://dav.example.com', WEBDAV_USERNAME: 'u', WEBDAV_PASSWORD: 'p' }) });
   const healthData = (await health.json()).data;
   check('health reports webdav enabled', healthData.webdav.enabled === true);
+
+  // ---------- AI config ----------
+  const aiUnauth = await callFunction('api/ai/config.js', { env: () => e });
+  check('ai config requires auth', aiUnauth.status === 401);
+
+  const aiDefault = await callFunction('api/ai/config.js', { env: () => e, headers: authedHeaders });
+  const aiDefaultData = (await aiDefault.json()).data;
+  check('ai config defaults empty', aiDefaultData.hasKey === false && aiDefaultData.baseUrl === '');
+
+  const aiBadUrl = await callFunction('api/ai/config.js', { method: 'PUT', body: { baseUrl: 'http://127.0.0.1:8080/v1' }, env: () => e, headers: authedHeaders });
+  const aiBadUrlData = await aiBadUrl.json();
+  check('ai config rejects private base url', aiBadUrl.status === 400 && aiBadUrlData.error.code === 'BAD_BASE_URL');
+
+  const aiSave = await callFunction('api/ai/config.js', { method: 'PUT', body: { baseUrl: 'https://api.example.com/v1', model: 'test-model', apiKey: 'sk-test-1234', temperature: 0.4, maxTokens: 800 }, env: () => e, headers: authedHeaders });
+  const aiSaveData = (await aiSave.json()).data;
+  check('ai config saves and masks key', aiSave.status === 200 && aiSaveData.hasKey === true && aiSaveData.keyPreview === '••••1234' && !('apiKey' in aiSaveData));
+
+  const encRow = e.DB.settings.find((r) => r.key === 'ai.api_key_enc');
+  check('ai key encrypted at rest', !!encRow && !encRow.value.includes('sk-test-1234'));
+
+  // ---------- AI complete ----------
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(
+    JSON.stringify({ choices: [{ message: { content: 'Improved text' } }] }),
+    { status: 200, headers: { 'Content-Type': 'application/json' } }
+  );
+  let aiComplete;
+  try {
+    aiComplete = await callFunction('api/ai/complete.js', { method: 'POST', body: { action: 'improve', input: '# Hi' }, env: () => e, headers: authedHeaders });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  const aiCompleteData = (await aiComplete.json()).data;
+  check('ai complete proxies provider', aiComplete.status === 200 && aiCompleteData.text === 'Improved text' && aiCompleteData.action === 'improve');
+
+  globalThis.fetch = async () => new Response(
+    JSON.stringify({ error: { message: 'bad key' } }),
+    { status: 401, headers: { 'Content-Type': 'application/json' } }
+  );
+  let aiErr;
+  try {
+    aiErr = await callFunction('api/ai/complete.js', { method: 'POST', body: { action: 'improve', input: 'x' }, env: () => e, headers: authedHeaders });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  const aiErrData = await aiErr.json();
+  check('ai complete surfaces provider error', aiErr.status === 502 && aiErrData.error.code === 'UPSTREAM_ERROR');
+
+  const aiBadMax = await callFunction('api/ai/config.js', { method: 'PUT', body: { maxTokens: 5000 }, env: () => e, headers: authedHeaders });
+  const aiBadMaxData = await aiBadMax.json();
+  check('ai config rejects maxTokens > 4096', aiBadMax.status === 400 && aiBadMaxData.error.code === 'BAD_MAX_TOKENS');
+
+  const aiLongInput = await callFunction('api/ai/complete.js', { method: 'POST', body: { action: 'improve', input: 'x'.repeat(13000) }, env: () => e, headers: authedHeaders });
+  const aiLongInputData = await aiLongInput.json();
+  check('ai complete rejects overlong input', aiLongInput.status === 400 && aiLongInputData.error.code === 'INPUT_TOO_LONG');
+
+  globalThis.fetch = (url, opts) => new Promise((_, reject) => {
+    opts.signal.addEventListener('abort', () => {
+      const err = new Error('aborted');
+      err.name = 'AbortError';
+      reject(err);
+    });
+  });
+  let aiTimeout;
+  try {
+    aiTimeout = await callFunction('api/ai/complete.js', { method: 'POST', body: { action: 'improve', input: 'x' }, env: () => ({ ...e, AI_TIMEOUT_MS: '30' }), headers: authedHeaders });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  const aiTimeoutData = await aiTimeout.json();
+  check('ai complete times out cleanly', aiTimeout.status === 504 && aiTimeoutData.error.code === 'UPSTREAM_TIMEOUT');
+
+  const aiClear = await callFunction('api/ai/config.js', { method: 'PUT', body: { clearKey: true }, env: () => e, headers: authedHeaders });
+  check('ai config clears key', (await aiClear.json()).data.hasKey === false);
+
+  const aiNoKey = await callFunction('api/ai/complete.js', { method: 'POST', body: { action: 'improve', input: 'x' }, env: () => e, headers: authedHeaders });
+  check('ai complete requires configuration', aiNoKey.status === 400 && (await aiNoKey.json()).error.code === 'AI_NOT_CONFIGURED');
+
+  // ---------- API tokens ----------
+  const tokensUnauth = await callFunction('api/tokens/index.js', { env: () => e });
+  check('tokens require auth', tokensUnauth.status === 401);
+
+  const tokenCreate = await callFunction('api/tokens/index.js', { method: 'POST', body: { name: 'cli' }, env: () => e, headers: authedHeaders });
+  const tokenData = (await tokenCreate.json()).data;
+  check('create api token', tokenCreate.status === 201 && /^mdn_[0-9a-f]{48}$/.test(tokenData.token) && tokenData.prefix === tokenData.token.slice(0, 11) && tokenData.scope === 'read');
+  check('token hash stored, plaintext not stored', !JSON.stringify(e.DB.apiTokens).includes(tokenData.token));
+
+  const tokenList = await callFunction('api/tokens/index.js', { env: () => e, headers: authedHeaders });
+  const tokenListData = (await tokenList.json()).data;
+  check('list api tokens hides secrets', tokenListData.length === 1 && !('token' in tokenListData[0]) && !('token_hash' in tokenListData[0]));
+
+  // ---------- MCP ----------
+  const note2 = (await (await callFunction('api/notes/index.js', { method: 'POST', body: { title: 'MCP Note', content: '# MCP\n\nbody text' }, env: () => e, headers: authedHeaders })).json()).data;
+  const bearer = { authorization: 'Bearer ' + tokenData.token };
+
+  const mcpNoAuth = await callFunction('api/mcp/index.js', { method: 'POST', body: { jsonrpc: '2.0', id: 1, method: 'ping' }, env: () => e });
+  check('mcp requires bearer token', mcpNoAuth.status === 401);
+
+  const mcpInit = await callFunction('api/mcp/index.js', { method: 'POST', body: { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'test', version: '1' } } }, env: () => e, headers: bearer });
+  const mcpInitData = await mcpInit.json();
+  check('mcp initialize', mcpInit.status === 200 && !!mcpInitData.result.protocolVersion && mcpInitData.result.serverInfo.name === 'markdown-notepad' && !!mcpInitData.result.capabilities.tools);
+
+  const mcpPing = await callFunction('api/mcp/index.js', { method: 'POST', body: { jsonrpc: '2.0', id: 2, method: 'ping' }, env: () => e, headers: bearer });
+  const mcpPingData = await mcpPing.json();
+  check('mcp ping', mcpPing.status === 200 && mcpPingData.result && mcpPingData.id === 2);
+
+  const mcpTools = await callFunction('api/mcp/index.js', { method: 'POST', body: { jsonrpc: '2.0', id: 3, method: 'tools/list' }, env: () => e, headers: bearer });
+  const mcpToolsData = await mcpTools.json();
+  const toolNames = (mcpToolsData.result.tools || []).map((t) => t.name);
+  check('mcp tools/list', mcpTools.status === 200 && toolNames.includes('list_notes') && toolNames.includes('get_note') && toolNames.includes('search_notes'));
+  check('read token hides write tools', !toolNames.includes('create_note') && !toolNames.includes('delete_note'));
+
+  const mcpWriteDenied = await callFunction('api/mcp/index.js', { method: 'POST', body: { jsonrpc: '2.0', id: 40, method: 'tools/call', params: { name: 'create_note', arguments: { title: 'x' } } }, env: () => e, headers: bearer });
+  const mcpWriteDeniedData = await mcpWriteDenied.json();
+  check('read token denied write tool', mcpWriteDeniedData.error && mcpWriteDeniedData.error.code === -32003);
+
+  const mcpGet = await callFunction('api/mcp/index.js', { method: 'POST', body: { jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'get_note', arguments: { id: note2.id } } }, env: () => e, headers: bearer });
+  const mcpGetData = await mcpGet.json();
+  check('mcp tools/call get_note', mcpGet.status === 200 && mcpGetData.result.isError === false && mcpGetData.result.content[0].text.includes('MCP Note') && mcpGetData.result.content[0].text.includes('body text'));
+
+  const mcpMissing = await callFunction('api/mcp/index.js', { method: 'POST', body: { jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'get_note', arguments: { id: 'nope' } } }, env: () => e, headers: bearer });
+  const mcpMissingData = await mcpMissing.json();
+  check('mcp tool error is flagged', mcpMissing.status === 200 && mcpMissingData.result.isError === true);
+
+  const mcpNote = await callFunction('api/mcp/index.js', { method: 'POST', body: { jsonrpc: '2.0', method: 'notifications/initialized' }, env: () => e, headers: bearer });
+  check('mcp notification returns 202', mcpNote.status === 202);
+
+  const mcpUnknown = await callFunction('api/mcp/index.js', { method: 'POST', body: { jsonrpc: '2.0', id: 6, method: 'nope' }, env: () => e, headers: bearer });
+  const mcpUnknownData = await mcpUnknown.json();
+  check('mcp unknown method', mcpUnknownData.error && mcpUnknownData.error.code === -32601);
+
+  // ---------- MCP write tools (write-scoped token) ----------
+  const writeTokenCreate = await callFunction('api/tokens/index.js', { method: 'POST', body: { name: 'writer', scope: 'write' }, env: () => e, headers: authedHeaders });
+  const writeTokenData = (await writeTokenCreate.json()).data;
+  check('create write token', writeTokenCreate.status === 201 && writeTokenData.scope === 'write');
+  const writeBearer = { authorization: 'Bearer ' + writeTokenData.token };
+
+  const writeTools = await callFunction('api/mcp/index.js', { method: 'POST', body: { jsonrpc: '2.0', id: 10, method: 'tools/list' }, env: () => e, headers: writeBearer });
+  const writeToolNames = ((await writeTools.json()).result.tools || []).map((t) => t.name);
+  check('write token sees write tools', writeToolNames.includes('create_note') && writeToolNames.includes('update_note') && writeToolNames.includes('append_to_note') && writeToolNames.includes('delete_note'));
+
+  const mcpCreate = await callFunction('api/mcp/index.js', { method: 'POST', body: { jsonrpc: '2.0', id: 11, method: 'tools/call', params: { name: 'create_note', arguments: { title: 'From MCP', content: 'hello', tags: ['a', 'b'] } } }, env: () => e, headers: writeBearer });
+  const mcpCreateData = await mcpCreate.json();
+  const newId = JSON.parse(mcpCreateData.result.content[0].text).id;
+  check('mcp create_note', mcpCreateData.result.isError === false && !!newId);
+
+  const mcpUpdate = await callFunction('api/mcp/index.js', { method: 'POST', body: { jsonrpc: '2.0', id: 12, method: 'tools/call', params: { name: 'update_note', arguments: { id: newId, content: 'updated body' } } }, env: () => e, headers: writeBearer });
+  const mcpUpdateData = await mcpUpdate.json();
+  const updatedNote = JSON.parse(mcpUpdateData.result.content[0].text).note;
+  check('mcp update_note', mcpUpdateData.result.isError === false && updatedNote.content === 'updated body' && updatedNote.title === 'From MCP');
+
+  const mcpAppend = await callFunction('api/mcp/index.js', { method: 'POST', body: { jsonrpc: '2.0', id: 13, method: 'tools/call', params: { name: 'append_to_note', arguments: { id: newId, text: 'appended' } } }, env: () => e, headers: writeBearer });
+  const mcpAppendData = await mcpAppend.json();
+  const appendedNote = JSON.parse(mcpAppendData.result.content[0].text).note;
+  check('mcp append_to_note', mcpAppendData.result.isError === false && appendedNote.content === 'updated body\n\nappended');
+
+  const mcpDelete = await callFunction('api/mcp/index.js', { method: 'POST', body: { jsonrpc: '2.0', id: 14, method: 'tools/call', params: { name: 'delete_note', arguments: { id: newId } } }, env: () => e, headers: writeBearer });
+  const mcpDeleteData = await mcpDelete.json();
+  check('mcp delete_note', mcpDeleteData.result.isError === false && JSON.parse(mcpDeleteData.result.content[0].text).deleted === true);
+
+  const tokenRevoke = await callFunction('api/tokens/[id].js', { method: 'DELETE', params: { id: tokenData.id }, env: () => e, headers: authedHeaders });
+  check('revoke api token', tokenRevoke.status === 200);
+  const writeRevoke = await callFunction('api/tokens/[id].js', { method: 'DELETE', params: { id: writeTokenData.id }, env: () => e, headers: authedHeaders });
+  check('revoke write token', writeRevoke.status === 200);
+  const mcpAfterRevoke = await callFunction('api/mcp/index.js', { method: 'POST', body: { jsonrpc: '2.0', id: 7, method: 'ping' }, env: () => e, headers: bearer });
+  check('revoked token rejected', mcpAfterRevoke.status === 401);
 
   // logout
   const logout = await callFunction('api/auth/logout.js', { method: 'POST', env: () => e, headers: authedHeaders });

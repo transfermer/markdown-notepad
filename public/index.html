@@ -35,6 +35,7 @@
         <div class="topbar-right">
           <button id="btn-export" class="btn" title="Download this note as .md">⬇ Save to local</button>
           <button id="btn-backup" class="btn hidden" title="Backup this note to WebDAV">☁ Backup</button>
+          <button id="btn-settings" class="btn ghost" title="AI and app settings">Settings</button>
           <button id="btn-logout" class="btn ghost">Log out</button>
         </div>
       </header>
@@ -80,6 +81,7 @@
               <input type="text" id="note-title" class="title-input" placeholder="Note title" maxlength="200">
               <div class="editor-meta">
                 <span id="note-saved" class="muted"></span>
+                <button id="btn-ai" class="btn small" title="AI actions">AI</button>
                 <button id="btn-preview" class="btn small" title="Toggle preview">👁 Preview</button>
                 <button id="btn-share" class="btn small" title="Share this note">🔗 Share</button>
                 <button id="btn-delete" class="btn small danger" title="Delete note">🗑</button>
@@ -119,9 +121,82 @@
       </div>
     </div>
 
+    <!-- AI action modal -->
+    <div id="ai-modal" class="modal hidden">
+      <div class="modal-card ai-scroll">
+        <h2>AI</h2>
+        <p class="muted small">Runs on the server through your configured provider. Review the result before applying.</p>
+        <div id="ai-actions" class="ai-actions"></div>
+        <input type="text" id="ai-instruction" class="modal-input hidden" placeholder="Instruction (e.g. turn this into a checklist)">
+        <input type="text" id="ai-language" class="modal-input hidden" placeholder="Translate to (e.g. English)">
+        <div class="modal-actions">
+          <button id="btn-ai-run" class="btn primary">Run</button>
+          <button id="btn-ai-apply" class="btn hidden">Apply</button>
+          <button id="btn-ai-copy" class="btn hidden">Copy</button>
+          <button id="btn-ai-close" class="btn ghost">Close</button>
+        </div>
+        <p id="ai-status" class="muted small"></p>
+        <textarea id="ai-output" class="ai-output hidden" readonly spellcheck="false"></textarea>
+      </div>
+    </div>
+
+    <!-- Settings modal -->
+    <div id="settings-modal" class="modal hidden">
+      <div class="modal-card ai-scroll">
+        <h2>Settings</h2>
+        <p class="muted small">Connect an OpenAI-compatible provider for the AI actions. The API key is stored encrypted on the server and is never sent back to the browser.</p>
+        <label class="field-label" for="ai-base-url">Base URL</label>
+        <input type="text" id="ai-base-url" class="modal-input" placeholder="https://api.openai.com/v1" autocomplete="off">
+        <label class="field-label" for="ai-model">Model</label>
+        <input type="text" id="ai-model" class="modal-input" placeholder="gpt-4o-mini" autocomplete="off">
+        <label class="field-label" for="ai-api-key">API key</label>
+        <input type="password" id="ai-api-key" class="modal-input" placeholder="Leave blank to keep the current key" autocomplete="new-password">
+        <div class="field-row">
+          <div>
+            <label class="field-label" for="ai-temperature">Temperature</label>
+            <input type="number" id="ai-temperature" class="modal-input" min="0" max="2" step="0.1" placeholder="0.3">
+          </div>
+          <div>
+            <label class="field-label" for="ai-max-tokens">Max tokens</label>
+            <input type="number" id="ai-max-tokens" class="modal-input" min="1" max="32000" step="1" placeholder="1024">
+          </div>
+        </div>
+        <p id="ai-key-state" class="muted small"></p>
+        <div class="modal-actions">
+          <button id="btn-ai-save" class="btn primary">Save</button>
+          <button id="btn-ai-test" class="btn">Test connection</button>
+          <button id="btn-ai-clear-key" class="btn ghost">Clear key</button>
+          <button id="btn-settings-close" class="btn ghost">Close</button>
+        </div>
+        <p id="ai-settings-status" class="muted small"></p>
+        <hr class="sep">
+        <h3 class="subhead">MCP API tokens</h3>
+        <p class="muted small">Bearer tokens for the remote MCP endpoint at <code>/api/mcp</code>. A new token is shown only once, so copy it immediately.</p>
+        <div class="field-row">
+          <div>
+            <label class="field-label" for="token-name">Token name</label>
+            <input type="text" id="token-name" class="modal-input" placeholder="e.g. my-agent" autocomplete="off">
+          </div>
+          <div>
+            <label class="field-label" for="token-scope">Scope</label>
+            <select id="token-scope" class="modal-input">
+              <option value="read">Read-only</option>
+              <option value="write">Read + write</option>
+            </select>
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button id="btn-token-create" class="btn">Create token</button>
+        </div>
+        <div id="token-list" class="token-list"></div>
+        <p id="token-status" class="muted small"></p>
+      </div>
+    </div>
+
   </div>
 
   <script src="/vendor/markdown-it.min.js"></script>
+  <script src="/vendor/dompurify.min.js"></script>
   <script src="/js/app.js"></script>
 </body>
 </html>

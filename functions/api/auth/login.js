@@ -1,5 +1,8 @@
 // POST /api/auth/login  { password }  ->  sets HttpOnly session cookie
-import { json, fail, getEnv, validateAdminPassword } from '../_lib.js';
+import {
+  json, fail, getEnv, validateAdminPassword,
+  clientIP, loginFailureState, recordLoginFailure, resetLoginFailures
+} from '../_lib.js';
 
 export async function onRequest(context) {
   if (context.request.method !== 'POST') {
@@ -9,17 +12,30 @@ export async function onRequest(context) {
     const body = await context.request.json();
     const password = typeof body.password === 'string' ? body.password : '';
     const env = getEnv(context.env);
+    const ip = clientIP(context.request);
 
     if (!env.ADMIN_PASSWORD) {
       return fail('Login is not configured on the server (ADMIN_PASSWORD is unset)', 503, 'NOT_CONFIGURED');
     }
-    if (!validateAdminPassword(password)) {
+
+    const state = await loginFailureState(context.env.CACHE, ip);
+    if (state.exceeded) {
+      return fail(
+        'Too many failed login attempts. Try again in ' + state.retryAfter + ' seconds.',
+        429,
+        'RATE_LIMITED'
+      );
+    }
+
+    const formatOk = validateAdminPassword(password);
+    let match = false;
+    if (formatOk) match = await timingSafeMatch(password, env.ADMIN_PASSWORD);
+    if (!formatOk || !match) {
+      await recordLoginFailure(context.env.CACHE, ip);
       return fail('Invalid password', 401, 'UNAUTHORIZED');
     }
 
-    if (!(await timingSafeMatch(password, env.ADMIN_PASSWORD))) {
-      return fail('Invalid password', 401, 'UNAUTHORIZED');
-    }
+    await resetLoginFailures(context.env.CACHE, ip);
 
     const token = crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random();
     await context.env.CACHE.put('session:' + token, '1', { expirationTtl: 60 * 60 * 24 * 7 }); // 7 days
