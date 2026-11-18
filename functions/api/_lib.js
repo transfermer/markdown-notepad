@@ -63,6 +63,8 @@ export function getEnv(env) {
   return {
     ADMIN_PASSWORD: env.ADMIN_PASSWORD || '',
     SESSION_SECRET: env.SESSION_SECRET || '',
+    AI_CONFIG_SECRET: env.AI_CONFIG_SECRET || '',
+    AI_TIMEOUT_MS: env.AI_TIMEOUT_MS || '',
     WEBDAV_URL: env.WEBDAV_URL || '',
     WEBDAV_USERNAME: env.WEBDAV_USERNAME || '',
     WEBDAV_PASSWORD: env.WEBDAV_PASSWORD || ''
@@ -219,6 +221,66 @@ export async function kvDelete(kv, keys) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Login rate limiting (brute-force protection)
+// ---------------------------------------------------------------------------
+
+export const LOGIN_FAIL_MAX = 5;
+export const LOGIN_FAIL_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
+
+export function clientIP(request) {
+  const fwd = request.headers.get('x-forwarded-for') || '';
+  const first = fwd.split(',')[0];
+  const ip = (first || '').trim();
+  return ip || 'unknown';
+}
+
+/**
+ * Reads current failed-login state for an IP. Does not mutate.
+ */
+export async function loginFailureState(kv, ip) {
+  if (!kv || !ip) return { count: 0, resetAt: 0, exceeded: false, retryAfter: 0 };
+  const entry = (await kvGetJSON(kv, 'login:fail:' + ip)) || {};
+  const now = Date.now();
+  if (!entry.resetAt || entry.resetAt <= now) {
+    return { count: 0, resetAt: now + LOGIN_FAIL_WINDOW_MS, exceeded: false, retryAfter: 0 };
+  }
+  return {
+    count: Number(entry.count) || 0,
+    resetAt: entry.resetAt,
+    exceeded: (Number(entry.count) || 0) >= LOGIN_FAIL_MAX,
+    retryAfter: Math.max(0, Math.ceil((entry.resetAt - now) / 1000))
+  };
+}
+
+/**
+ * Records one failed login for an IP and returns the updated state.
+ */
+export async function recordLoginFailure(kv, ip) {
+  if (!kv || !ip) return { count: 0, resetAt: 0, exceeded: false, retryAfter: 0 };
+  const key = 'login:fail:' + ip;
+  const now = Date.now();
+  let entry = (await kvGetJSON(kv, key)) || {};
+  if (!entry.resetAt || entry.resetAt <= now) {
+    entry = { count: 1, resetAt: now + LOGIN_FAIL_WINDOW_MS };
+  } else {
+    entry.count = (Number(entry.count) || 0) + 1;
+  }
+  await kvPutJSON(kv, key, entry, Math.ceil(LOGIN_FAIL_WINDOW_MS / 1000));
+  return {
+    count: entry.count,
+    resetAt: entry.resetAt,
+    exceeded: entry.count >= LOGIN_FAIL_MAX,
+    retryAfter: Math.max(0, Math.ceil((entry.resetAt - now) / 1000))
+  };
+}
+
+export async function resetLoginFailures(kv, ip) {
+  if (!kv || !ip) return;
+  await kvDelete(kv, 'login:fail:' + ip);
+}
+
+// ---------------------------------------------------------------------------
 // Cache invalidation helpers ------------------------------------------------
 
 export function noteCacheKeys(noteId, note = null) {
@@ -236,6 +298,18 @@ export function noteCacheKeys(noteId, note = null) {
 
 export async function invalidateNoteCache(kv, noteId, note = null) {
   await kvDelete(kv, noteCacheKeys(noteId, note));
+}
+
+// ---------------------------------------------------------------------------
+// Auth (shared by all admin-only endpoints)
+// ---------------------------------------------------------------------------
+
+export async function isAuthed(context) {
+  const cookie = context.request.headers.get('Cookie') || '';
+  const m = cookie.match(/mdnote_session=([^;]+)/);
+  if (!m || !context.env.CACHE) return false;
+  const exists = await context.env.CACHE.get('session:' + m[1]);
+  return !!exists;
 }
 
 // ---------------------------------------------------------------------------

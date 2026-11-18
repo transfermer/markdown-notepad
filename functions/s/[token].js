@@ -35,9 +35,19 @@ const SHARE_PAGE = `<!DOCTYPE html>
     <div id="note-body"><p class="muted">Loading…</p></div>
   </div>
   <script src="/vendor/markdown-it.min.js"><\/script>
+  <script src="/vendor/dompurify.min.js"><\/script>
   <script>
     (function () {
       var md = window.markdownit({ html: true, linkify: true, breaks: true });
+      function renderMarkdown(src) {
+        var dirty = md.render(String(src == null ? '' : src));
+        if (!window.DOMPurify) {
+          var safe = document.createElement('div');
+          safe.textContent = String(src == null ? '' : src);
+          return '<pre class="muted">' + safe.innerHTML + '</pre>';
+        }
+        return window.DOMPurify.sanitize(dirty, { USE_PROFILES: { html: true } });
+      }
       function isImageUrl(url) {
         if (!url) return false;
         if (/^data:image\//i.test(url)) return true;
@@ -66,7 +76,7 @@ const SHARE_PAGE = `<!DOCTYPE html>
           var meta = 'Updated ' + new Date(d.updatedAt).toLocaleString();
           document.getElementById('note-meta').textContent = meta;
           var body = document.getElementById('note-body');
-          body.innerHTML = md.render(d.content || '');
+          body.innerHTML = renderMarkdown(d.content || '');
           promoteImageLinks(body);
           document.getElementById('btn-dl').addEventListener('click', function () {
             var blob = new Blob([d.content || ''], { type: 'text/markdown;charset=utf-8' });
@@ -78,7 +88,12 @@ const SHARE_PAGE = `<!DOCTYPE html>
         })
         .catch(function (err) {
           document.getElementById('note-title').textContent = 'Not found';
-          document.getElementById('note-body').innerHTML = '<p class="muted">' + err.message + '</p>';
+          var box = document.createElement('p');
+          box.className = 'muted';
+          box.textContent = (err && err.message) || 'Not found';
+          var target = document.getElementById('note-body');
+          target.innerHTML = '';
+          target.appendChild(box);
         });
     })();
   </script>

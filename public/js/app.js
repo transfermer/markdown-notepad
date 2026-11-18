@@ -8,6 +8,22 @@
     breaks: true
   });
 
+  // Notes may contain arbitrary Markdown/HTML, so the rendered output is always
+  // sanitized before it is inserted with innerHTML (prevents stored XSS).
+  const PURIFY_CONFIG = { USE_PROFILES: { html: true } };
+
+  function renderMarkdown(src) {
+    const dirty = md.render(String(src == null ? '' : src));
+    if (!window.DOMPurify) {
+      // Fail closed: never inject un-sanitized HTML.
+      console.warn('DOMPurify is not loaded; rendering note content as plain text.');
+      const safe = document.createElement('div');
+      safe.textContent = String(src == null ? '' : src);
+      return '<pre class="muted">' + safe.innerHTML + '</pre>';
+    }
+    return window.DOMPurify.sanitize(dirty, PURIFY_CONFIG);
+  }
+
   const IMAGE_URL_RE = /^(https?:\/\/|\/\/|\/|data:image\/).+\.(png|jpe?g|gif|webp|svg|bmp|avif|ico)(\?.*)?$/i;
   const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|svg|bmp|avif|ico)(\?|#|$)/i;
 
@@ -410,7 +426,7 @@
   }
 
   function renderPreview() {
-    notePreview.innerHTML = md.render(noteContent.value || '');
+    notePreview.innerHTML = renderMarkdown(noteContent.value);
     promoteImageLinks(notePreview);
   }
 
@@ -846,6 +862,294 @@
     setTimeout(() => {
       if (!state.dirty) noteSaved.textContent = 'Saved';
     }, 2000);
+  });
+
+  // ---------------- AI ----------------
+  const btnAi = $('#btn-ai');
+  const aiModal = $('#ai-modal');
+  const aiActions = $('#ai-actions');
+  const aiInstruction = $('#ai-instruction');
+  const aiLanguage = $('#ai-language');
+  const aiOutput = $('#ai-output');
+  const aiStatus = $('#ai-status');
+  const btnAiRun = $('#btn-ai-run');
+  const btnAiApply = $('#btn-ai-apply');
+  const btnAiCopy = $('#btn-ai-copy');
+  const btnAiClose = $('#btn-ai-close');
+
+  const btnSettings = $('#btn-settings');
+  const settingsModal = $('#settings-modal');
+  const aiBaseUrl = $('#ai-base-url');
+  const aiModel = $('#ai-model');
+  const aiApiKey = $('#ai-api-key');
+  const aiTemperature = $('#ai-temperature');
+  const aiMaxTokens = $('#ai-max-tokens');
+  const aiKeyState = $('#ai-key-state');
+  const aiSettingsStatus = $('#ai-settings-status');
+  const btnAiSave = $('#btn-ai-save');
+  const btnAiTest = $('#btn-ai-test');
+  const btnAiClearKey = $('#btn-ai-clear-key');
+  const btnSettingsClose = $('#btn-settings-close');
+
+  const AI_ACTION_DEFS = [
+    { id: 'improve', label: 'Improve' },
+    { id: 'rewrite', label: 'Rewrite' },
+    { id: 'summarize', label: 'Summarize' },
+    { id: 'outline', label: 'Outline' },
+    { id: 'expand', label: 'Expand' },
+    { id: 'title', label: 'Title' },
+    { id: 'tags', label: 'Tags' },
+    { id: 'translate', label: 'Translate' },
+    { id: 'custom', label: 'Custom' }
+  ];
+  let aiAction = 'improve';
+  let aiSelection = null;
+
+  function setAiStatus(msg) { aiStatus.textContent = msg || ''; }
+
+  function renderAiActions() {
+    aiActions.innerHTML = '';
+    AI_ACTION_DEFS.forEach((def) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'ai-chip' + (def.id === aiAction ? ' active' : '');
+      b.textContent = def.label;
+      b.addEventListener('click', () => {
+        aiAction = def.id;
+        renderAiActions();
+        syncAiInputs();
+      });
+      aiActions.appendChild(b);
+    });
+  }
+
+  function syncAiInputs() {
+    aiInstruction.classList.toggle('hidden', aiAction !== 'custom');
+    aiLanguage.classList.toggle('hidden', aiAction !== 'translate');
+    aiOutput.classList.add('hidden');
+    btnAiApply.classList.add('hidden');
+    btnAiCopy.classList.add('hidden');
+    setAiStatus('');
+  }
+
+  function openAi() {
+    if (!state.currentId) return;
+    const start = noteContent.selectionStart || 0;
+    const end = noteContent.selectionEnd || 0;
+    aiSelection = end > start ? { start, end } : null;
+    aiOutput.value = '';
+    renderAiActions();
+    syncAiInputs();
+    aiModal.classList.remove('hidden');
+  }
+
+  btnAi.addEventListener('click', openAi);
+  btnAiClose.addEventListener('click', () => aiModal.classList.add('hidden'));
+  aiModal.addEventListener('click', (e) => { if (e.target === aiModal) aiModal.classList.add('hidden'); });
+
+  function aiInputText() {
+    if (aiSelection) return noteContent.value.slice(aiSelection.start, aiSelection.end);
+    return noteContent.value;
+  }
+
+  async function runAi() {
+    const body = {
+      action: aiAction,
+      input: aiInputText(),
+      context: {
+        title: noteTitle.value,
+        category: noteCategory.value,
+        tags: noteTags.value.split(',').map((t) => t.trim()).filter(Boolean)
+      }
+    };
+    if (aiAction === 'custom') body.instruction = aiInstruction.value || 'Help improve the following note.';
+    if (aiAction === 'translate') body.language = aiLanguage.value || 'English';
+
+    setAiStatus('Running...');
+    btnAiRun.disabled = true;
+    try {
+      const data = await api('/api/ai/complete', { method: 'POST', body: JSON.stringify(body) });
+      aiOutput.value = data.text || '';
+      aiOutput.classList.remove('hidden');
+      btnAiApply.classList.remove('hidden');
+      btnAiCopy.classList.remove('hidden');
+      setAiStatus('');
+    } catch (err) {
+      setAiStatus(err.message);
+    } finally {
+      btnAiRun.disabled = false;
+    }
+  }
+
+  function parseTagsOutput(text) {
+    const m = String(text).match(/\{[\s\S]*\}/);
+    if (!m) return null;
+    try {
+      const obj = JSON.parse(m[0]);
+      const tags = Array.isArray(obj.tags) ? obj.tags.map((t) => String(t).trim()).filter(Boolean) : [];
+      return { category: typeof obj.category === 'string' ? obj.category.trim() : '', tags };
+    } catch {
+      return null;
+    }
+  }
+
+  function applyAiResult() {
+    const text = aiOutput.value;
+    if (aiAction === 'title') {
+      noteTitle.value = text.trim().replace(/^["'\u201c\u201d]+|["'\u201c\u201d]+$/g, '').slice(0, 200);
+    } else if (aiAction === 'tags') {
+      const parsed = parseTagsOutput(text);
+      if (!parsed) { setAiStatus('Could not parse tags from the response.'); return; }
+      if (parsed.category) noteCategory.value = parsed.category;
+      if (parsed.tags.length) noteTags.value = parsed.tags.join(', ');
+    } else if (aiSelection) {
+      const v = noteContent.value;
+      noteContent.value = v.slice(0, aiSelection.start) + text + v.slice(aiSelection.end);
+    } else {
+      noteContent.value = text;
+    }
+    markDirty();
+    renderPreview();
+    aiModal.classList.add('hidden');
+  }
+
+  btnAiRun.addEventListener('click', runAi);
+  btnAiApply.addEventListener('click', applyAiResult);
+  btnAiCopy.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(aiOutput.value);
+      setAiStatus('Copied!');
+    } catch {
+      aiOutput.select();
+      document.execCommand('copy');
+      setAiStatus('Copied!');
+    }
+  });
+
+  function setSettingsStatus(msg) { aiSettingsStatus.textContent = msg || ''; }
+
+  async function openSettings() {
+    settingsModal.classList.remove('hidden');
+    setSettingsStatus('Loading...');
+    try {
+      const cfg = await api('/api/ai/config');
+      aiBaseUrl.value = cfg.baseUrl || '';
+      aiModel.value = cfg.model || '';
+      aiTemperature.value = cfg.temperature == null ? '' : cfg.temperature;
+      aiMaxTokens.value = cfg.maxTokens == null ? '' : cfg.maxTokens;
+      aiApiKey.value = '';
+      aiKeyState.textContent = cfg.hasKey
+        ? ('A key is saved (' + cfg.keyPreview + '). Leave blank to keep it.')
+        : 'No API key saved yet.';
+      setSettingsStatus('');
+      loadTokens();
+    } catch (err) {
+      setSettingsStatus(err.message);
+    }
+  }
+
+  async function saveSettings() {
+    const body = {
+      baseUrl: aiBaseUrl.value.trim(),
+      model: aiModel.value.trim()
+    };
+    if (aiTemperature.value !== '') body.temperature = Number(aiTemperature.value);
+    if (aiMaxTokens.value !== '') body.maxTokens = Number(aiMaxTokens.value);
+    if (aiApiKey.value.trim() !== '') body.apiKey = aiApiKey.value.trim();
+
+    setSettingsStatus('Saving...');
+    try {
+      const cfg = await api('/api/ai/config', { method: 'PUT', body: JSON.stringify(body) });
+      aiApiKey.value = '';
+      aiKeyState.textContent = cfg.hasKey
+        ? ('Saved. Key ' + cfg.keyPreview + '.')
+        : 'Saved (no key).';
+      setSettingsStatus('Saved.');
+    } catch (err) {
+      setSettingsStatus(err.message);
+    }
+  }
+
+  btnSettings.addEventListener('click', openSettings);
+  btnAiSave.addEventListener('click', saveSettings);
+  btnSettingsClose.addEventListener('click', () => settingsModal.classList.add('hidden'));
+  settingsModal.addEventListener('click', (e) => { if (e.target === settingsModal) settingsModal.classList.add('hidden'); });
+
+  btnAiTest.addEventListener('click', async () => {
+    setSettingsStatus('Testing...');
+    try {
+      const data = await api('/api/ai/complete', { method: 'POST', body: JSON.stringify({ action: 'test' }) });
+      setSettingsStatus('Connection OK: ' + (data.text || '').trim().slice(0, 60));
+    } catch (err) {
+      setSettingsStatus('Test failed: ' + err.message);
+    }
+  });
+
+  btnAiClearKey.addEventListener('click', async () => {
+    setSettingsStatus('Clearing key...');
+    try {
+      const cfg = await api('/api/ai/config', { method: 'PUT', body: JSON.stringify({ clearKey: true }) });
+      aiKeyState.textContent = cfg.hasKey ? 'Key still set.' : 'No API key saved yet.';
+      setSettingsStatus('Key cleared.');
+    } catch (err) {
+      setSettingsStatus(err.message);
+    }
+  });
+
+  // ---------------- MCP API tokens ----------------
+  const tokenName = $('#token-name');
+  const tokenScope = $('#token-scope');
+  const tokenList = $('#token-list');
+  const tokenStatus = $('#token-status');
+  const btnTokenCreate = $('#btn-token-create');
+
+  function setTokenStatus(msg) { tokenStatus.textContent = msg || ''; }
+
+  async function loadTokens() {
+    try {
+      const tokens = await api('/api/tokens');
+      tokenList.innerHTML = '';
+      if (!tokens.length) {
+        tokenList.textContent = 'No tokens yet.';
+        return;
+      }
+      tokens.forEach((t) => {
+        const row = document.createElement('div');
+        row.className = 'token-row';
+        const label = document.createElement('span');
+        label.textContent = (t.name || '(unnamed)') + ' · ' + t.prefix + '… · ' + (t.scope || 'read');
+        const del = document.createElement('button');
+        del.className = 'btn small danger';
+        del.textContent = 'Revoke';
+        del.addEventListener('click', async () => {
+          setTokenStatus('Revoking...');
+          try {
+            await api('/api/tokens/' + encodeURIComponent(t.id), { method: 'DELETE' });
+            setTokenStatus('Revoked.');
+            await loadTokens();
+          } catch (err) {
+            setTokenStatus(err.message);
+          }
+        });
+        row.append(label, del);
+        tokenList.appendChild(row);
+      });
+    } catch (err) {
+      setTokenStatus(err.message);
+    }
+  }
+
+  btnTokenCreate.addEventListener('click', async () => {
+    const scope = tokenScope.value === 'write' ? 'write' : 'read';
+    setTokenStatus('Creating...');
+    try {
+      const created = await api('/api/tokens', { method: 'POST', body: JSON.stringify({ name: tokenName.value.trim(), scope }) });
+      tokenName.value = '';
+      setTokenStatus('Created (' + created.scope + '). Copy it now (shown once): ' + created.token);
+      await loadTokens();
+    } catch (err) {
+      setTokenStatus(err.message);
+    }
   });
 
   // ---------------- Search ----------------

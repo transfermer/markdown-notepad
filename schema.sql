@@ -22,9 +22,32 @@ CREATE TABLE IF NOT EXISTS shares (
 
 CREATE INDEX IF NOT EXISTS idx_shares_note ON shares (note_id);
 
+-- Key/value app settings (AI provider config, encrypted API key, etc.)
+CREATE TABLE IF NOT EXISTS settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+-- Bearer tokens for programmatic clients (MCP over HTTP).
+-- scope is 'read' (read-only tools) or 'write' (read + write tools).
+CREATE TABLE IF NOT EXISTS api_tokens (
+  id         TEXT PRIMARY KEY,
+  name       TEXT NOT NULL DEFAULT '',
+  token_hash TEXT NOT NULL UNIQUE,
+  prefix     TEXT NOT NULL DEFAULT '',
+  scope      TEXT NOT NULL DEFAULT 'read',
+  created_at INTEGER NOT NULL,
+  last_used  INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens (token_hash);
+
 -- Migration for existing installs: add category/tags if the columns don't exist yet.
 -- D1 doesn't support IF NOT EXISTS on ADD COLUMN, so this is included as a
 -- comment-friendly step; run it once via the console if your notes table was
 -- created before this upgrade:
 --   ALTER TABLE notes ADD COLUMN category TEXT NOT NULL DEFAULT '';
 --   ALTER TABLE notes ADD COLUMN tags    TEXT NOT NULL DEFAULT '[]';
+-- If your api_tokens table predates the scope column, add it once:
+--   ALTER TABLE api_tokens ADD COLUMN scope TEXT NOT NULL DEFAULT 'read';
